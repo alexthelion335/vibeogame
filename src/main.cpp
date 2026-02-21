@@ -379,9 +379,9 @@ int main() {
 
         Chicken c{};
         c.pos = {
-            camera.position.x + std::cosf(ang) * dist,
+            camera.position.x + std::cos(ang) * dist,
             0.6f,
-            camera.position.z + std::sinf(ang) * dist
+            camera.position.z + std::sin(ang) * dist
         };
         c.speed = RandRange(1.8f, 3.0f) + wave * 0.18f;
         c.hp = 20.0f + wave * 4.0f;
@@ -1087,9 +1087,9 @@ int main() {
             pitch = Clamp(pitch, -1.4f, 1.4f);
 
             Vector3 forward = {
-                std::cosf(pitch) * std::sinf(yaw),
-                std::sinf(pitch),
-                std::cosf(pitch) * std::cosf(yaw)
+                std::cos(pitch) * std::sin(yaw),
+                std::sin(pitch),
+                std::cos(pitch) * std::cos(yaw)
             };
             Vector3 flatForward = Vector3Normalize({forward.x, 0.0f, forward.z});
             Vector3 right = Vector3Normalize(Vector3CrossProduct(flatForward, {0.0f, 1.0f, 0.0f}));
@@ -1122,9 +1122,9 @@ int main() {
                 camera.position = coopPos;
                 camera.position.y = playerHeight;
                 Vector3 onlineForward = {
-                    std::cosf(pitch) * std::sinf(yaw),
-                    std::sinf(pitch),
-                    std::cosf(pitch) * std::cosf(yaw)
+                    std::cos(pitch) * std::sin(yaw),
+                    std::sin(pitch),
+                    std::cos(pitch) * std::cos(yaw)
                 };
                 camera.target = Vector3Add(camera.position, onlineForward);
             } else {
@@ -1196,9 +1196,9 @@ int main() {
                 if (coopShootDown && coopShootCooldown <= 0.0f) {
                     coopShootCooldown = 0.16f;
                     Vector3 coopForward = {
-                        std::cosf(coopPitch) * std::sinf(coopYaw),
-                        std::sinf(coopPitch),
-                        std::cosf(coopPitch) * std::cosf(coopYaw)
+                        std::cos(coopPitch) * std::sin(coopYaw),
+                        std::sin(coopPitch),
+                        std::cos(coopPitch) * std::cos(coopYaw)
                     };
                     coopForward = Vector3Normalize(coopForward);
 
@@ -1462,8 +1462,8 @@ int main() {
 
         for (const auto& c : chickens) {
             Vector3 bodyPos = c.pos;
-            bodyPos.y = 0.65f + std::sinf(c.wobble) * 0.06f;
-            Vector3 forwardDir = {std::sinf(c.facingYaw), 0.0f, std::cosf(c.facingYaw)};
+            bodyPos.y = 0.65f + std::sin(c.wobble) * 0.06f;
+            Vector3 forwardDir = {std::sin(c.facingYaw), 0.0f, std::cos(c.facingYaw)};
             Vector3 rightDir = {forwardDir.z, 0.0f, -forwardDir.x};
 
             // More accurate dynamic planar shadows (projected from sun direction)
@@ -1520,7 +1520,7 @@ int main() {
                 return p;
             };
 
-            float step = std::sinf(c.wobble * 1.8f);
+            float step = std::sin(c.wobble * 1.8f);
             float footLiftL = std::max(0.0f, step) * 0.06f;
             float footLiftR = std::max(0.0f, -step) * 0.06f;
 
@@ -1584,7 +1584,7 @@ int main() {
         auto DrawHumanoid = [&](Vector3 pos, float facingYaw, float hp, Color aliveColor, Color gunColor) {
             Vector3 body = {pos.x, 1.05f, pos.z};
             Vector3 head = {pos.x, 1.62f, pos.z};
-            Vector3 fwd = {std::sinf(facingYaw), 0.0f, std::cosf(facingYaw)};
+            Vector3 fwd = {std::sin(facingYaw), 0.0f, std::cos(facingYaw)};
             Vector3 right = {fwd.z, 0.0f, -fwd.x};
 
             DrawProjectedShadowCapsule({pos.x, 1.0f, pos.z}, {pos.x, 1.6f, pos.z}, 0.22f, 0.18f, Fade(BLACK, 0.30f));
