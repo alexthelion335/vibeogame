@@ -161,6 +161,8 @@ struct NetSnapshotPacket {
     uint16_t potatoCount = 0;
     uint16_t enemyPotatoCount = 0;
     uint16_t pad1 = 0;
+    int32_t waveTotalToSpawn = 0;
+    int32_t waveSpawned = 0;
 
     NetChickenSnapshot chickens[MAX_SYNC_CHICKENS]{};
     NetPotatoSnapshot potatoes[MAX_SYNC_POTATOES]{};
@@ -329,6 +331,14 @@ int main() {
     float coopYaw = PI;
     float coopPitch = 0.0f;
     float coopShootCooldown = 0.0f;
+    float coopVerticalVelocity = 0.0f;
+    bool coopGrounded = true;
+    int clientLastWave = 1;
+
+    // Client-side interpolation targets
+    Vector3 clientTargetPos = {2.5f, playerHeight, 8.0f};
+    Vector3 clientHostTargetPos = {0.0f, playerHeight, 6.0f};
+    float clientHostTargetYaw = PI;
 
     NetRole netRole = NetRole::None;
 #ifdef _WIN32
@@ -422,6 +432,12 @@ int main() {
         coopYaw = PI;
         coopPitch = 0.0f;
         coopShootCooldown = 0.0f;
+        coopVerticalVelocity = 0.0f;
+        coopGrounded = true;
+        clientLastWave = 1;
+        clientTargetPos = {2.5f, playerHeight, 8.0f};
+        clientHostTargetPos = {0.0f, playerHeight, 6.0f};
+        clientHostTargetYaw = PI;
         remoteInput = {};
         remoteInput.yaw = PI;
         score = 0;
@@ -649,17 +665,25 @@ int main() {
                     playerHealth = snap->playerHealth;
                     coopHealth = snap->coopHealth;
                     score = snap->score;
-                    wave = snap->wave;
+
+                    int newWave = snap->wave;
+                    if (newWave != clientLastWave) {
+                        clientLastWave = newWave;
+                        waveTitleTimer = waveTitleDuration;
+                    }
+                    wave = newWave;
+
                     dead = snap->dead != 0;
                     deathCause = static_cast<DeathCause>(snap->deathCause);
 
-                    onlineHostPos = FromNetVec3(snap->playerPos);
-                    onlineHostYaw = snap->playerYaw;
+                    clientHostTargetPos = FromNetVec3(snap->playerPos);
+                    clientHostTargetYaw = snap->playerYaw;
 
-                    camera.position = FromNetVec3(snap->coopPos);
-                    camera.position.y = playerHeight;
-                    coopPos = FromNetVec3(snap->coopPos);
+                    clientTargetPos = FromNetVec3(snap->coopPos);
                     coopYaw = snap->coopYaw;
+
+                    waveTotalToSpawn = snap->waveTotalToSpawn;
+                    waveSpawned = snap->waveSpawned;
 
                     chickens.clear();
                     chickens.reserve(snap->chickenCount);
@@ -748,6 +772,8 @@ int main() {
         snap.playerPitch = pitch;
         snap.coopPos = ToNetVec3(coopPos);
         snap.coopYaw = coopYaw;
+        snap.waveTotalToSpawn = waveTotalToSpawn;
+        snap.waveSpawned = waveSpawned;
 
         snap.chickenCount = static_cast<uint16_t>(std::min(static_cast<int>(chickens.size()), MAX_SYNC_CHICKENS));
         snap.potatoCount = static_cast<uint16_t>(std::min(static_cast<int>(potatoes.size()), MAX_SYNC_POTATOES));
@@ -1177,8 +1203,15 @@ int main() {
                 }
 
                 sendInputToHost(moveMask);
+
+                // Interpolate toward server position
+                float lerpSpeed = 18.0f * dt;
+                coopPos = Vector3Lerp(coopPos, clientTargetPos, Clamp(lerpSpeed, 0.0f, 1.0f));
+                onlineHostPos = Vector3Lerp(onlineHostPos, clientHostTargetPos, Clamp(lerpSpeed, 0.0f, 1.0f));
+                onlineHostYaw = onlineHostYaw + (clientHostTargetYaw - onlineHostYaw) * Clamp(lerpSpeed, 0.0f, 1.0f);
+
                 camera.position = coopPos;
-                camera.position.y = playerHeight;
+                camera.position.y = coopPos.y;
                 Vector3 onlineForward = {
                     std::cos(pitch) * std::sin(yaw),
                     std::sin(pitch),
@@ -1250,7 +1283,20 @@ int main() {
                     }
                     coopPos = Vector3Add(coopPos, Vector3Scale(coopDir, coopSpeed * dt));
                 }
-                coopPos.y = playerHeight;
+
+                // Co-op jump physics
+                bool coopJumpPressed = (gameMode == GameMode::Online) ? remoteInput.jump : IsKeyPressed(KEY_RIGHT_ALT);
+                if (coopGrounded && coopJumpPressed) {
+                    coopVerticalVelocity = 9.5f;
+                    coopGrounded = false;
+                }
+                coopVerticalVelocity -= gravity * dt;
+                coopPos.y += coopVerticalVelocity * dt;
+                if (coopPos.y <= playerHeight) {
+                    coopPos.y = playerHeight;
+                    coopVerticalVelocity = 0.0f;
+                    coopGrounded = true;
+                }
 
                 coopShootCooldown -= dt;
                 if (coopShootDown && coopShootCooldown <= 0.0f) {
@@ -1711,15 +1757,26 @@ int main() {
         DrawText(TextFormat("HP: %i", static_cast<int>(myHealth)), 36, 35, 30, myHealth > 30.0f ? GREEN : RED);
         DrawText(TextFormat("Score: %i", score), 36, 67, 26, YELLOW);
         DrawText(TextFormat("Wave: %i", wave), 36, 96, 26, SKYBLUE);
+
+        {
+            int chickensRemaining;
+            if (netRole == NetRole::Client) {
+                chickensRemaining = static_cast<int>(chickens.size());
+            } else {
+                chickensRemaining = static_cast<int>(chickens.size()) + std::max(0, waveTotalToSpawn - waveSpawned);
+            }
+            DrawRectangle(20, 140, 340, 32, Fade(BLACK, 0.45f));
+            DrawText(TextFormat("Chickens Left: %i", chickensRemaining), 36, 146, 24, ORANGE);
+        }
         if (gameMode == GameMode::CoOp || gameMode == GameMode::Online) {
-            DrawRectangle(20, 145, 340, 42, Fade(BLACK, 0.45f));
+            DrawRectangle(20, 178, 340, 42, Fade(BLACK, 0.45f));
             const char* coopLabel = (netRole == NetRole::Client) ? "HOST HP" : ((gameMode == GameMode::Online) ? "ONLINE HP" : "CO-OP HP");
-            DrawText(TextFormat("%s: %i", coopLabel, static_cast<int>(partnerHealth)), 36, 154, 28, partnerHealth > 30.0f ? SKYBLUE : ORANGE);
+            DrawText(TextFormat("%s: %i", coopLabel, static_cast<int>(partnerHealth)), 36, 187, 28, partnerHealth > 30.0f ? SKYBLUE : ORANGE);
         }
 
         if (gameMode == GameMode::Online) {
-            DrawRectangle(20, 194, 520, 36, Fade(BLACK, 0.45f));
-            DrawText(TextFormat("Online: %s", netStatus.empty() ? "Starting..." : netStatus.c_str()), 36, 202, 22, YELLOW);
+            DrawRectangle(20, 226, 520, 36, Fade(BLACK, 0.45f));
+            DrawText(TextFormat("Online: %s", netStatus.empty() ? "Starting..." : netStatus.c_str()), 36, 234, 22, YELLOW);
         }
 
         if (!paused) {
