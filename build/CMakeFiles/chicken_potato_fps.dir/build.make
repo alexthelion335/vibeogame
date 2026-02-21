@@ -76,15 +76,15 @@ CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o: CMakeFiles/chicken_potato_fps.
 CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o: /home/alex/Repos/vibeogame/src/main.cpp
 CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o: CMakeFiles/chicken_potato_fps.dir/compiler_depend.ts
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/alex/Repos/vibeogame/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o -MF CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o.d -o CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o -c /home/alex/Repos/vibeogame/src/main.cpp
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o -MF CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o.d -o CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o -c /home/alex/Repos/vibeogame/src/main.cpp
 
 CMakeFiles/chicken_potato_fps.dir/src/main.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/chicken_potato_fps.dir/src/main.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/alex/Repos/vibeogame/src/main.cpp > CMakeFiles/chicken_potato_fps.dir/src/main.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/alex/Repos/vibeogame/src/main.cpp > CMakeFiles/chicken_potato_fps.dir/src/main.cpp.i
 
 CMakeFiles/chicken_potato_fps.dir/src/main.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/chicken_potato_fps.dir/src/main.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/alex/Repos/vibeogame/src/main.cpp -o CMakeFiles/chicken_potato_fps.dir/src/main.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/alex/Repos/vibeogame/src/main.cpp -o CMakeFiles/chicken_potato_fps.dir/src/main.cpp.s
 
 # Object files for target chicken_potato_fps
 chicken_potato_fps_OBJECTS = \
