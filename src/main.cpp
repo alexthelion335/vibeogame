@@ -89,6 +89,7 @@ constexpr uint32_t NET_MAGIC = 0x43504653;  // CPFS
 constexpr uint8_t NET_HELLO = 1;
 constexpr uint8_t NET_INPUT = 2;
 constexpr uint8_t NET_SNAPSHOT = 3;
+constexpr uint8_t NET_DISCONNECT = 4;
 constexpr int NET_PORT = 42069;
 constexpr int MAX_SYNC_CHICKENS = 72;
 constexpr int MAX_SYNC_POTATOES = 96;
@@ -344,6 +345,8 @@ int main() {
     float netSnapshotCooldown = 0.0f;
     Vector3 onlineHostPos = {0.0f, playerHeight, 6.0f};
     float onlineHostYaw = PI;
+    bool netDisconnected = false;
+    double netLastReceiveTime = 0.0;
 
     struct RemoteInputState {
         bool forward = false;
@@ -461,6 +464,25 @@ int main() {
     };
 
     auto closeNetwork = [&]() {
+        // Send disconnect notification to peer
+        if (netHasPeer) {
+            NetHeader disc{};
+            disc.magic = NET_MAGIC;
+            disc.type = NET_DISCONNECT;
+#ifdef _WIN32
+            if (netSocket != INVALID_SOCKET) {
+                for (int i = 0; i < 3; ++i)
+                    sendto(netSocket, reinterpret_cast<const char*>(&disc), sizeof(disc), 0,
+                           reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+            }
+#else
+            if (netSocket >= 0) {
+                for (int i = 0; i < 3; ++i)
+                    sendto(netSocket, &disc, sizeof(disc), 0,
+                           reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+            }
+#endif
+        }
 #ifdef _WIN32
         if (netSocket != INVALID_SOCKET) {
             closesocket(netSocket);
@@ -474,6 +496,8 @@ int main() {
 #endif
         netRole = NetRole::None;
         netHasPeer = false;
+        netDisconnected = false;
+        netLastReceiveTime = 0.0;
         netStatus.clear();
     };
 
@@ -617,7 +641,10 @@ int main() {
                     remoteInput.pitch = in->pitch;
                 }
             } else if (netRole == NetRole::Client) {
-                if (hdr->type == NET_SNAPSHOT && bytes >= static_cast<ssize_t>(sizeof(NetSnapshotPacket))) {
+                if (hdr->type == NET_DISCONNECT) {
+                    netDisconnected = true;
+                    netStatus = "Host disconnected";
+                } else if (hdr->type == NET_SNAPSHOT && bytes >= static_cast<ssize_t>(sizeof(NetSnapshotPacket))) {
                     const NetSnapshotPacket* snap = reinterpret_cast<const NetSnapshotPacket*>(buffer);
 
                     playerHealth = snap->playerHealth;
@@ -670,6 +697,7 @@ int main() {
                         enemyPotatoes.push_back(ep);
                     }
 
+                    netLastReceiveTime = GetTime();
                     netStatus = (snap->hasClient != 0) ? "Connected" : "Waiting for host snapshot";
                 }
             }
@@ -773,6 +801,35 @@ int main() {
         if (gameMode == GameMode::Online && netRole == NetRole::Client && netHasPeer && netSendCooldown <= 0.0f) {
             sendHello();
             netSendCooldown = 0.5f;
+        }
+
+        // Check for host disconnect (timeout or explicit disconnect packet)
+        if (gameMode == GameMode::Online && netRole == NetRole::Client && !netDisconnected) {
+            if (netLastReceiveTime > 0.0 && (GetTime() - netLastReceiveTime) > 5.0) {
+                netDisconnected = true;
+                netStatus = "Connection to host lost";
+            }
+        }
+
+        if (netDisconnected) {
+            if (IsKeyPressed(KEY_ESCAPE)) {
+                netDisconnected = false;
+                closeNetwork();
+                screenState = ScreenState::Intro;
+                EnableCursor();
+                ShowCursor();
+                continue;
+            }
+
+            BeginDrawing();
+            ClearBackground({20, 20, 30, 255});
+            const char* discText = "HOST DISCONNECTED";
+            int discFontSize = 48;
+            DrawText(discText, (screenWidth - MeasureText(discText, discFontSize)) / 2, screenHeight / 2 - 40, discFontSize, RED);
+            const char* escText = "Press ESC to return to menu";
+            DrawText(escText, (screenWidth - MeasureText(escText, 26)) / 2, screenHeight / 2 + 30, 26, YELLOW);
+            EndDrawing();
+            continue;
         }
 
         const int panelW = 560;
@@ -1094,29 +1151,33 @@ int main() {
             Vector3 flatForward = Vector3Normalize({forward.x, 0.0f, forward.z});
             Vector3 right = Vector3Normalize(Vector3CrossProduct(flatForward, {0.0f, 1.0f, 0.0f}));
 
-            float moveSpeed = IsKeyDown(KEY_LEFT_SHIFT) ? 10.5f : 7.0f;
-            Vector3 movement = {0.0f, 0.0f, 0.0f};
-            if (IsKeyDown(KEY_W)) movement = Vector3Add(movement, flatForward);
-            if (IsKeyDown(KEY_S)) movement = Vector3Subtract(movement, flatForward);
-            if (IsKeyDown(KEY_D)) movement = Vector3Add(movement, right);
-            if (IsKeyDown(KEY_A)) movement = Vector3Subtract(movement, right);
+            if (playerHealth > 0.0f || onlineClient) {
+                float moveSpeed = IsKeyDown(KEY_LEFT_SHIFT) ? 10.5f : 7.0f;
+                Vector3 movement = {0.0f, 0.0f, 0.0f};
+                if (IsKeyDown(KEY_W)) movement = Vector3Add(movement, flatForward);
+                if (IsKeyDown(KEY_S)) movement = Vector3Subtract(movement, flatForward);
+                if (IsKeyDown(KEY_D)) movement = Vector3Add(movement, right);
+                if (IsKeyDown(KEY_A)) movement = Vector3Subtract(movement, right);
 
-            if (Vector3Length(movement) > 0.001f) {
-                movement = Vector3Scale(Vector3Normalize(movement), moveSpeed * dt);
-                camera.position = Vector3Add(camera.position, movement);
+                if (Vector3Length(movement) > 0.001f) {
+                    movement = Vector3Scale(Vector3Normalize(movement), moveSpeed * dt);
+                    camera.position = Vector3Add(camera.position, movement);
+                }
             }
 
             camera.target = Vector3Add(camera.position, forward);
 
             if (onlineClient) {
                 uint8_t moveMask = 0;
-                if (IsKeyDown(KEY_W)) moveMask |= (1 << 0);
-                if (IsKeyDown(KEY_S)) moveMask |= (1 << 1);
-                if (IsKeyDown(KEY_A)) moveMask |= (1 << 2);
-                if (IsKeyDown(KEY_D)) moveMask |= (1 << 3);
-                if (IsKeyDown(KEY_LEFT_SHIFT)) moveMask |= (1 << 4);
-                if (IsKeyDown(KEY_SPACE)) moveMask |= (1 << 5);
-                if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) moveMask |= (1 << 6);
+                if (coopHealth > 0.0f) {
+                    if (IsKeyDown(KEY_W)) moveMask |= (1 << 0);
+                    if (IsKeyDown(KEY_S)) moveMask |= (1 << 1);
+                    if (IsKeyDown(KEY_A)) moveMask |= (1 << 2);
+                    if (IsKeyDown(KEY_D)) moveMask |= (1 << 3);
+                    if (IsKeyDown(KEY_LEFT_SHIFT)) moveMask |= (1 << 4);
+                    if (IsKeyDown(KEY_SPACE)) moveMask |= (1 << 5);
+                    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) moveMask |= (1 << 6);
+                }
 
                 sendInputToHost(moveMask);
                 camera.position = coopPos;
@@ -1128,7 +1189,7 @@ int main() {
                 };
                 camera.target = Vector3Add(camera.position, onlineForward);
             } else {
-                if (grounded && IsKeyPressed(KEY_SPACE)) {
+                if (playerHealth > 0.0f && grounded && IsKeyPressed(KEY_SPACE)) {
                     verticalVelocity = 9.5f;
                     grounded = false;
                 }
@@ -1144,7 +1205,7 @@ int main() {
                 camera.target = Vector3Add(camera.position, forward);
 
                 shootCooldown -= dt;
-                if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && shootCooldown <= 0.0f) {
+                if (playerHealth > 0.0f && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && shootCooldown <= 0.0f) {
                     shootCooldown = 0.12f;
 
                     Vector3 muzzle = Vector3Add(camera.position, Vector3Scale(forward, 1.1f));
@@ -1169,10 +1230,12 @@ int main() {
                     if (IsKeyDown(KEY_L)) coopMove.x += 1.0f;
                     coopShootDown = IsKeyDown(KEY_RIGHT_SHIFT);
                 } else {
-                    if (remoteInput.forward) coopMove.z -= 1.0f;
-                    if (remoteInput.backward) coopMove.z += 1.0f;
-                    if (remoteInput.left) coopMove.x -= 1.0f;
-                    if (remoteInput.right) coopMove.x += 1.0f;
+                    Vector3 remoteFwd = {std::sin(remoteInput.yaw), 0.0f, std::cos(remoteInput.yaw)};
+                    Vector3 remoteRight = {-std::cos(remoteInput.yaw), 0.0f, std::sin(remoteInput.yaw)};
+                    if (remoteInput.forward) coopMove = Vector3Add(coopMove, remoteFwd);
+                    if (remoteInput.backward) coopMove = Vector3Subtract(coopMove, remoteFwd);
+                    if (remoteInput.right) coopMove = Vector3Add(coopMove, remoteRight);
+                    if (remoteInput.left) coopMove = Vector3Subtract(coopMove, remoteRight);
                     coopYaw = remoteInput.yaw;
                     coopPitch = remoteInput.pitch;
                     coopShootDown = remoteInput.shoot;
@@ -1326,6 +1389,10 @@ int main() {
             score += (before - static_cast<int>(chickens.size())) * 10;
 
             if (chickens.empty() && waveSpawned >= waveTotalToSpawn) {
+                if (gameMode == GameMode::CoOp || gameMode == GameMode::Online) {
+                    if (playerHealth <= 0.0f) playerHealth = 100.0f;
+                    if (coopHealth <= 0.0f) coopHealth = 100.0f;
+                }
                 startWave(wave + 1);
             }
 
@@ -1640,14 +1707,17 @@ int main() {
 
         EndMode3D();
 
+        float myHealth = (netRole == NetRole::Client) ? coopHealth : playerHealth;
+        float partnerHealth = (netRole == NetRole::Client) ? playerHealth : coopHealth;
+
         DrawRectangle(20, 20, 340, 115, Fade(BLACK, 0.45f));
-        DrawText(TextFormat("HP: %i", static_cast<int>(playerHealth)), 36, 35, 30, playerHealth > 30.0f ? GREEN : RED);
+        DrawText(TextFormat("HP: %i", static_cast<int>(myHealth)), 36, 35, 30, myHealth > 30.0f ? GREEN : RED);
         DrawText(TextFormat("Score: %i", score), 36, 67, 26, YELLOW);
         DrawText(TextFormat("Wave: %i", wave), 36, 96, 26, SKYBLUE);
         if (gameMode == GameMode::CoOp || gameMode == GameMode::Online) {
             DrawRectangle(20, 145, 340, 42, Fade(BLACK, 0.45f));
-            const char* coopLabel = (gameMode == GameMode::Online) ? "ONLINE HP" : "CO-OP HP";
-            DrawText(TextFormat("%s: %i", coopLabel, static_cast<int>(coopHealth)), 36, 154, 28, coopHealth > 30.0f ? SKYBLUE : ORANGE);
+            const char* coopLabel = (netRole == NetRole::Client) ? "HOST HP" : ((gameMode == GameMode::Online) ? "ONLINE HP" : "CO-OP HP");
+            DrawText(TextFormat("%s: %i", coopLabel, static_cast<int>(partnerHealth)), 36, 154, 28, partnerHealth > 30.0f ? SKYBLUE : ORANGE);
         }
 
         if (gameMode == GameMode::Online) {
@@ -1673,6 +1743,18 @@ int main() {
             const int bannerY = screenHeight / 3 - bannerH / 2;
             DrawRectangle(bannerX, bannerY, bannerW, bannerH, Fade(BLACK, 0.45f * alpha));
             DrawText(TextFormat("WAVE %i", wave), screenWidth / 2 - 90, bannerY + 20, 36, Fade(YELLOW, alpha));
+        }
+
+        if (!dead && gameMode != GameMode::SinglePlayer) {
+            bool iAmDead = (netRole == NetRole::Client) ? (coopHealth <= 0.0f) : (playerHealth <= 0.0f);
+            if (iAmDead) {
+                DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.5f));
+                const char* waitText = "YOU DIED";
+                int waitFontSize = 48;
+                DrawText(waitText, (screenWidth - MeasureText(waitText, waitFontSize)) / 2, screenHeight / 2 - 60, waitFontSize, RED);
+                const char* reviveText = "Partner still fighting! Revive next wave.";
+                DrawText(reviveText, (screenWidth - MeasureText(reviveText, 24)) / 2, screenHeight / 2 + 10, 24, YELLOW);
+            }
         }
 
         if (dead) {
