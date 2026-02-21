@@ -23,6 +23,10 @@ add_executable(chicken_potato_fps
 
 target_link_libraries(chicken_potato_fps PRIVATE raylib)
 
+if(WIN32)
+    target_link_libraries(chicken_potato_fps PRIVATE ws2_32)
+endif()
+
 if(UNIX AND NOT APPLE)
     target_link_libraries(chicken_potato_fps PRIVATE m dl pthread rt X11)
 endif()

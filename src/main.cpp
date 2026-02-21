@@ -8,11 +8,24 @@
 #include <string>
 #include <vector>
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
+// Platform-specific networking
+#ifdef _WIN32
+    #define _WINSOCK_DEPRECATED_NO_WARNINGS
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    typedef int socklen_t;
+    #define close closesocket
+#else
+    #include <arpa/inet.h>
+    #include <fcntl.h>
+    #include <netinet/in.h>
+    #include <sys/socket.h>
+    #include <unistd.h>
+    typedef int SOCKET;
+    #define INVALID_SOCKET -1
+    #define SOCKET_ERROR -1
+#endif
 
 struct Potato {
     Vector3 pos{};
@@ -210,6 +223,14 @@ static void DrawMenuCard(Rectangle rect,
 }
 
 int main() {
+#ifdef _WIN32
+    // Initialize Winsock
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        return 1;
+    }
+#endif
+
     const int initialScreenWidth = 1400;
     const int initialScreenHeight = 900;
     int screenWidth = initialScreenWidth;
@@ -306,7 +327,11 @@ int main() {
     float coopShootCooldown = 0.0f;
 
     NetRole netRole = NetRole::None;
+#ifdef _WIN32
+    SOCKET netSocket = INVALID_SOCKET;
+#else
     int netSocket = -1;
+#endif
     sockaddr_in netPeerAddr{};
     bool netHasPeer = false;
     std::string netJoinAddress = "127.0.0.1";
@@ -433,15 +458,31 @@ int main() {
     };
 
     auto closeNetwork = [&]() {
+#ifdef _WIN32
+        if (netSocket != INVALID_SOCKET) {
+            closesocket(netSocket);
+            netSocket = INVALID_SOCKET;
+        }
+#else
         if (netSocket >= 0) {
             close(netSocket);
             netSocket = -1;
         }
+#endif
         netRole = NetRole::None;
         netHasPeer = false;
         netStatus.clear();
     };
 
+#ifdef _WIN32
+    auto createUdpSocket = [&]() -> SOCKET {
+        SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+        if (s == INVALID_SOCKET) return INVALID_SOCKET;
+        u_long mode = 1;
+        ioctlsocket(s, FIONBIO, &mode);
+        return s;
+    };
+#else
     auto createUdpSocket = [&]() -> int {
         int s = socket(AF_INET, SOCK_DGRAM, 0);
         if (s < 0) return -1;
@@ -451,11 +492,16 @@ int main() {
         }
         return s;
     };
+#endif
 
     auto setupOnlineHost = [&]() -> bool {
         closeNetwork();
         netSocket = createUdpSocket();
+#ifdef _WIN32
+        if (netSocket == INVALID_SOCKET) {
+#else
         if (netSocket < 0) {
+#endif
             netStatus = "Failed to create socket";
             return false;
         }
@@ -479,7 +525,11 @@ int main() {
     auto setupOnlineClient = [&]() -> bool {
         closeNetwork();
         netSocket = createUdpSocket();
+#ifdef _WIN32
+        if (netSocket == INVALID_SOCKET) {
+#else
         if (netSocket < 0) {
+#endif
             netStatus = "Failed to create socket";
             return false;
         }
@@ -501,24 +551,42 @@ int main() {
     };
 
     auto sendHello = [&]() {
+#ifdef _WIN32
+        if (netSocket == INVALID_SOCKET || !netHasPeer) return;
+#else
         if (netSocket < 0 || !netHasPeer) return;
+#endif
         NetHelloPacket hello{};
         hello.h.type = NET_HELLO;
+#ifdef _WIN32
+        sendto(netSocket, reinterpret_cast<const char*>(&hello), sizeof(hello), 0,
+               reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#else
         sendto(netSocket, &hello, sizeof(hello), 0,
                reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#endif
     };
 
     auto recvNetworkPackets = [&]() {
+#ifdef _WIN32
+        if (netSocket == INVALID_SOCKET) return;
+#else
         if (netSocket < 0) return;
+#endif
 
         uint8_t buffer[32768];
         while (true) {
             sockaddr_in from{};
             socklen_t fromLen = sizeof(from);
+#ifdef _WIN32
+            int bytes = recvfrom(netSocket, reinterpret_cast<char*>(buffer), sizeof(buffer), 0,
+                                 reinterpret_cast<sockaddr*>(&from), &fromLen);
+#else
             ssize_t bytes = recvfrom(netSocket, buffer, sizeof(buffer), 0,
                                      reinterpret_cast<sockaddr*>(&from), &fromLen);
+#endif
             if (bytes <= 0) break;
-            if (bytes < static_cast<ssize_t>(sizeof(NetHeader))) continue;
+            if (bytes < static_cast<int>(sizeof(NetHeader))) continue;
 
             const NetHeader* hdr = reinterpret_cast<const NetHeader*>(buffer);
             if (hdr->magic != NET_MAGIC) continue;
@@ -606,7 +674,11 @@ int main() {
     };
 
     auto sendInputToHost = [&](uint8_t moveMask) {
+#ifdef _WIN32
+        if (netRole != NetRole::Client || netSocket == INVALID_SOCKET || !netHasPeer) return;
+#else
         if (netRole != NetRole::Client || netSocket < 0 || !netHasPeer) return;
+#endif
 
         NetInputPacket input{};
         input.h.type = NET_INPUT;
@@ -615,12 +687,21 @@ int main() {
         input.yaw = yaw;
         input.pitch = pitch;
 
+#ifdef _WIN32
+        sendto(netSocket, reinterpret_cast<const char*>(&input), sizeof(input), 0,
+               reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#else
         sendto(netSocket, &input, sizeof(input), 0,
                reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#endif
     };
 
     auto sendSnapshotToClient = [&]() {
+#ifdef _WIN32
+        if (netRole != NetRole::Host || netSocket == INVALID_SOCKET || !netHasPeer) return;
+#else
         if (netRole != NetRole::Host || netSocket < 0 || !netHasPeer) return;
+#endif
 
         NetSnapshotPacket snap{};
         snap.h.type = NET_SNAPSHOT;
@@ -662,8 +743,13 @@ int main() {
             snap.enemyPotatoes[i].radius = enemyPotatoes[i].radius;
         }
 
+#ifdef _WIN32
+        sendto(netSocket, reinterpret_cast<const char*>(&snap), sizeof(snap), 0,
+               reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#else
         sendto(netSocket, &snap, sizeof(snap), 0,
                reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#endif
     };
 
     startWave(1);
@@ -1627,5 +1713,10 @@ int main() {
 
     closeNetwork();
     CloseWindow();
+
+#ifdef _WIN32
+    WSACleanup();
+#endif
+
     return 0;
 }
