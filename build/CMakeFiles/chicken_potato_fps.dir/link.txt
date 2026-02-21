@@ -1,1 +1,0 @@
-/usr/bin/g++ -Wl,--dependency-file=CMakeFiles/chicken_potato_fps.dir/link.d CMakeFiles/chicken_potato_fps.dir/src/main.cpp.o -o chicken_potato_fps  _deps/raylib-build/raylib/libraylib.a -lm -ldl -lpthread -lrt -lX11 /usr/lib/libOpenGL.so /usr/lib/libGLX.so /usr/lib/libGLU.so /usr/lib/librt.a -lm -ldl
