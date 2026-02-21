@@ -1164,6 +1164,14 @@ int main() {
             if (IsKeyPressed(KEY_R)) {
                 resetGame();
             }
+            if (IsKeyPressed(KEY_ESCAPE)) {
+                closeNetwork();
+                resetGame();
+                screenState = ScreenState::Intro;
+                EnableCursor();
+                ShowCursor();
+                continue;
+            }
         } else if (!paused) {
             bool onlineClient = (gameMode == GameMode::Online && netRole == NetRole::Client);
 
@@ -1926,6 +1934,7 @@ int main() {
             DrawText(deathText, (screenWidth - deathTextWidth) / 2, screenHeight / 2 - 80, deathFontSize, RED);
             DrawText(TextFormat("Final Score: %i", score), screenWidth / 2 - 130, screenHeight / 2 + 4, 30, RAYWHITE);
             DrawText("Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
+            DrawText("Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
         }
 
         if (paused && !dead) {
