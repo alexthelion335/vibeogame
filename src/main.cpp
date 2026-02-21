@@ -358,6 +358,10 @@ int main() {
     bool netDisconnected = false;
     double netLastReceiveTime = 0.0;
 
+    float damageFlashTimer = 0.0f;
+    Vector3 knockbackVel = {0.0f, 0.0f, 0.0f};
+    float prevMyHealth = 100.0f;
+
     struct RemoteInputState {
         bool forward = false;
         bool backward = false;
@@ -448,6 +452,9 @@ int main() {
         chickens.clear();
         shootCooldown = 0.0f;
         damageTick = 0.0f;
+        damageFlashTimer = 0.0f;
+        knockbackVel = {0.0f, 0.0f, 0.0f};
+        prevMyHealth = 100.0f;
         startWave(1);
     };
 
@@ -1190,6 +1197,29 @@ int main() {
 
             camera.target = Vector3Add(camera.position, forward);
 
+            // Apply knockback velocity
+            if (Vector3Length(knockbackVel) > 0.01f) {
+                camera.position = Vector3Add(camera.position, Vector3Scale(knockbackVel, dt));
+                knockbackVel = Vector3Scale(knockbackVel, std::max(0.0f, 1.0f - 8.0f * dt));
+            }
+
+            // Detect damage on client side (health decreased from snapshot)
+            float currentMyHealth = (netRole == NetRole::Client) ? coopHealth : playerHealth;
+            if (currentMyHealth < prevMyHealth - 0.5f) {
+                damageFlashTimer = 0.3f;
+                // Client knockback: push backward
+                if (netRole == NetRole::Client) {
+                    Vector3 back = {-std::sin(yaw), 0.0f, -std::cos(yaw)};
+                    knockbackVel = Vector3Add(knockbackVel, Vector3Scale(back, 4.0f));
+                }
+            }
+            prevMyHealth = currentMyHealth;
+
+            // Decay damage flash
+            if (damageFlashTimer > 0.0f) {
+                damageFlashTimer = std::max(0.0f, damageFlashTimer - dt);
+            }
+
             if (onlineClient) {
                 uint8_t moveMask = 0;
                 if (coopHealth > 0.0f) {
@@ -1399,6 +1429,10 @@ int main() {
                     if (prevHealth > 0.0f && playerHealth <= 0.0f) {
                         deathCause = DeathCause::Potato;
                     }
+                    // Knockback from potato direction
+                    Vector3 kb = Vector3Normalize(Vector3Subtract(camera.position, ep.pos));
+                    knockbackVel = Vector3Add(knockbackVel, Vector3Scale(kb, 6.0f));
+                    damageFlashTimer = 0.35f;
                 } else if ((gameMode == GameMode::CoOp || gameMode == GameMode::Online) && coopHealth > 0.0f && Vector3Distance(ep.pos, coopPos) < 0.62f) {
                     ep.life = 0.0f;
                     coopHealth -= 11.0f;
@@ -1452,6 +1486,10 @@ int main() {
                         if (prevHealth > 0.0f && playerHealth <= 0.0f) {
                             deathCause = DeathCause::Peck;
                         }
+                        // Knockback away from chicken
+                        Vector3 kb = Vector3Normalize(toP1);
+                        knockbackVel = Vector3Add(knockbackVel, Vector3Scale(kb, 4.0f));
+                        damageFlashTimer = 0.3f;
                     }
                     if ((gameMode == GameMode::CoOp || gameMode == GameMode::Online) && coopHealth > 0.0f) {
                         Vector3 toP2 = Vector3Subtract(coopPos, c.pos);
@@ -1478,6 +1516,31 @@ int main() {
                 }
             }
             }
+        }
+
+        if (gameMode == GameMode::Online && netRole == NetRole::Client && !paused && !dead) {
+            for (auto& p : potatoes) {
+                p.vel.y -= 6.0f * dt;
+                p.pos = Vector3Add(p.pos, Vector3Scale(p.vel, dt));
+                p.life -= dt;
+            }
+            potatoes.erase(
+                std::remove_if(potatoes.begin(), potatoes.end(), [](const Potato& p) {
+                    return p.life <= 0.0f || p.pos.y < -2.0f;
+                }),
+                potatoes.end()
+            );
+            for (auto& ep : enemyPotatoes) {
+                ep.vel.y -= 5.0f * dt;
+                ep.pos = Vector3Add(ep.pos, Vector3Scale(ep.vel, dt));
+                ep.life -= dt;
+            }
+            enemyPotatoes.erase(
+                std::remove_if(enemyPotatoes.begin(), enemyPotatoes.end(), [](const EnemyPotato& ep) {
+                    return ep.life <= 0.0f || ep.pos.y < -2.0f;
+                }),
+                enemyPotatoes.end()
+            );
         }
 
         if (!dead && !paused && IsCursorHidden() == false) {
@@ -1688,7 +1751,33 @@ int main() {
 
             float hpRatio = c.hp / (20.0f + wave * 4.0f);
             hpRatio = Clamp(hpRatio, 0.0f, 1.0f);
-            DrawCube({bodyPos.x, bodyPos.y + 1.08f, bodyPos.z}, 0.8f * hpRatio, 0.05f, 0.05f, RED);
+
+            // Billboard HP bar facing camera
+            {
+                Vector3 barCenter = {bodyPos.x, bodyPos.y + 1.08f, bodyPos.z};
+                Vector3 toCamera = Vector3Subtract(camera.position, barCenter);
+                toCamera.y = 0.0f;
+                if (Vector3Length(toCamera) > 0.001f) {
+                    toCamera = Vector3Normalize(toCamera);
+                } else {
+                    toCamera = {0.0f, 0.0f, 1.0f};
+                }
+                Vector3 barRight = Vector3Normalize(Vector3CrossProduct({0.0f, 1.0f, 0.0f}, toCamera));
+                float barHalfW = 0.4f;
+                float barH = 0.05f;
+
+                // Background bar (dark)
+                Vector3 bgL = Vector3Subtract(barCenter, Vector3Scale(barRight, barHalfW));
+                Vector3 bgR = Vector3Add(barCenter, Vector3Scale(barRight, barHalfW));
+                DrawLine3D(bgL, bgR, DARKGRAY);
+                DrawCylinderEx(bgL, bgR, barH, barH, 4, Fade(DARKGRAY, 0.5f));
+
+                // HP fill bar
+                float fillW = barHalfW * hpRatio;
+                Vector3 hpL = Vector3Subtract(barCenter, Vector3Scale(barRight, barHalfW));
+                Vector3 hpR = Vector3Add(hpL, Vector3Scale(barRight, fillW * 2.0f));
+                DrawCylinderEx(hpL, hpR, barH, barH, 4, RED);
+            }
         }
 
         auto DrawHumanoid = [&](Vector3 pos, float facingYaw, float hp, Color aliveColor, Color gunColor) {
@@ -1749,6 +1838,21 @@ int main() {
         DrawCylinderEx(barrelStart, barrelEnd, 0.06f, 0.06f, 14, ScaleColor(GRAY, 0.75f + 0.4f * sunlight));
 
         EndMode3D();
+
+        // Red damage flash vignette
+        if (damageFlashTimer > 0.0f) {
+            float flashAlpha = Clamp(damageFlashTimer / 0.3f, 0.0f, 1.0f) * 0.45f;
+            int borderSize = std::min(screenWidth, screenHeight) / 6;
+            Color flashColor = Fade(RED, flashAlpha);
+            // Top edge
+            DrawRectangleGradientV(0, 0, screenWidth, borderSize, flashColor, Fade(RED, 0.0f));
+            // Bottom edge
+            DrawRectangleGradientV(0, screenHeight - borderSize, screenWidth, borderSize, Fade(RED, 0.0f), flashColor);
+            // Left edge
+            DrawRectangleGradientH(0, 0, borderSize, screenHeight, flashColor, Fade(RED, 0.0f));
+            // Right edge
+            DrawRectangleGradientH(screenWidth - borderSize, 0, borderSize, screenHeight, Fade(RED, 0.0f), flashColor);
+        }
 
         float myHealth = (netRole == NetRole::Client) ? coopHealth : playerHealth;
         float partnerHealth = (netRole == NetRole::Client) ? playerHealth : coopHealth;
