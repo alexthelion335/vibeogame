@@ -8,6 +8,8 @@ A small 3D first-person survival shooter where you fight off hordes of angry chi
 - Potato cannon projectile shooting
 - Chicken horde AI that chases player
 - Wave-based difficulty scaling
+- Local co-op mode
+- Online multiplayer mode (host/join by IP, LAN/port-forward)
 - Health, score, wave UI
 - Restart on death
 
@@ -35,4 +37,12 @@ cmake --build build -j
 - `Space` - jump
 - `Left Shift` - sprint
 - `R` - restart when dead
-- `Esc` - quit
+- `Esc` - pause menu
+
+### Start menu modes
+
+- `Singleplayer`
+- `Co-op` (local second player): `I J K L` move, `Right Shift` shoot, `Right Ctrl` sprint
+- `Online Multiplayer`: choose `Host Game` or `Join Game` and enter host IPv4 (default `127.0.0.1`)
+
+Online mode uses UDP port `42069`.
