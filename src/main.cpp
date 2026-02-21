@@ -819,6 +819,16 @@ int main() {
 
     while (!shouldExit) {
         if (WindowShouldClose()) {
+            if (screenState == ScreenState::Playing && dead) {
+                closeNetwork();
+                resetGame();
+                screenState = ScreenState::Intro;
+                EnableCursor();
+                ShowCursor();
+                BeginDrawing();
+                EndDrawing();
+                continue;
+            }
             shouldExit = true;
             continue;
         }
@@ -1170,6 +1180,8 @@ int main() {
                 screenState = ScreenState::Intro;
                 EnableCursor();
                 ShowCursor();
+                BeginDrawing();
+                EndDrawing();
                 continue;
             }
         } else if (!paused) {
