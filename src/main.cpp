@@ -61,6 +61,40 @@ struct Cloud {
     float speed = 1.0f;
 };
 
+struct ConfettiParticle {
+    Vector3 pos{};
+    Vector3 vel{};
+    float life = 0.0f;
+    Color color{};
+};
+
+struct MedPack {
+    Vector3 pos{};
+    bool active = true;
+    float bobTimer = 0.0f;
+};
+
+struct GrenadeProjectile {
+    Vector3 pos{};
+    Vector3 vel{};
+    float fuseTimer = 0.0f;
+    float blastRadius = 6.0f;
+    bool exploded = false;
+};
+
+enum class WeaponType {
+    PotatoCannon = 0,
+    PotatoShotgun = 1,
+    PotatoGrenade = 2
+};
+
+struct InventorySlot {
+    WeaponType weapon = WeaponType::PotatoCannon;
+    bool owned = false;
+};
+
+constexpr int MAX_INVENTORY_SLOTS = 3;
+
 enum class DeathCause {
     None,
     Peck,
@@ -362,6 +396,22 @@ int main() {
     Vector3 knockbackVel = {0.0f, 0.0f, 0.0f};
     float prevMyHealth = 100.0f;
 
+    int chickenNuggets = 0;
+    std::vector<ConfettiParticle> confetti;
+    std::vector<MedPack> medPacks;
+    std::vector<GrenadeProjectile> grenades;
+
+    InventorySlot inventory[MAX_INVENTORY_SLOTS];
+    int currentWeaponSlot = 0;
+    int fireRateUpgradeCount = 0;
+
+    bool shopOpen = false;
+    float shopTimer = 0.0f;
+    constexpr float shopDuration = 10.0f;
+
+    bool inventoryOpen = false;
+    int inventorySwapFrom = -1;
+
     struct RemoteInputState {
         bool forward = false;
         bool backward = false;
@@ -455,6 +505,19 @@ int main() {
         damageFlashTimer = 0.0f;
         knockbackVel = {0.0f, 0.0f, 0.0f};
         prevMyHealth = 100.0f;
+        chickenNuggets = 0;
+        confetti.clear();
+        medPacks.clear();
+        grenades.clear();
+        currentWeaponSlot = 0;
+        fireRateUpgradeCount = 0;
+        shopOpen = false;
+        shopTimer = 0.0f;
+        inventoryOpen = false;
+        inventorySwapFrom = -1;
+        inventory[0] = {WeaponType::PotatoCannon, true};
+        inventory[1] = {WeaponType::PotatoShotgun, false};
+        inventory[2] = {WeaponType::PotatoGrenade, false};
         startWave(1);
     };
 
@@ -814,6 +877,10 @@ int main() {
                reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
 #endif
     };
+
+    inventory[0] = {WeaponType::PotatoCannon, true};
+    inventory[1] = {WeaponType::PotatoShotgun, false};
+    inventory[2] = {WeaponType::PotatoGrenade, false};
 
     startWave(1);
 
@@ -1187,11 +1254,13 @@ int main() {
         } else if (!paused) {
             bool onlineClient = (gameMode == GameMode::Online && netRole == NetRole::Client);
 
-            Vector2 mouse = GetMouseDelta();
-            const float mouseSensitivity = 0.0026f;
-            yaw -= mouse.x * mouseSensitivity;
-            pitch -= mouse.y * mouseSensitivity;
-            pitch = Clamp(pitch, -1.4f, 1.4f);
+            if (!shopOpen && !inventoryOpen) {
+                Vector2 mouse = GetMouseDelta();
+                const float mouseSensitivity = 0.0026f;
+                yaw -= mouse.x * mouseSensitivity;
+                pitch -= mouse.y * mouseSensitivity;
+                pitch = Clamp(pitch, -1.4f, 1.4f);
+            }
 
             Vector3 forward = {
                 std::cos(pitch) * std::sin(yaw),
@@ -1200,6 +1269,24 @@ int main() {
             };
             Vector3 flatForward = Vector3Normalize({forward.x, 0.0f, forward.z});
             Vector3 right = Vector3Normalize(Vector3CrossProduct(flatForward, {0.0f, 1.0f, 0.0f}));
+
+            // Weapon switching with number keys
+            if (!shopOpen && !inventoryOpen) {
+                if (IsKeyPressed(KEY_ONE) && inventory[0].owned) currentWeaponSlot = 0;
+                if (IsKeyPressed(KEY_TWO) && inventory[1].owned) currentWeaponSlot = 1;
+                if (IsKeyPressed(KEY_THREE) && inventory[2].owned) currentWeaponSlot = 2;
+            }
+
+            // Inventory toggle
+            if (IsKeyPressed(KEY_E) && !shopOpen) {
+                inventoryOpen = !inventoryOpen;
+                if (inventoryOpen) {
+                    EnableCursor();
+                } else {
+                    DisableCursor();
+                    inventorySwapFrom = -1;
+                }
+            }
 
             if (playerHealth > 0.0f || onlineClient) {
                 float moveSpeed = IsKeyDown(KEY_LEFT_SHIFT) ? 10.5f : 7.0f;
@@ -1285,17 +1372,57 @@ int main() {
                 camera.target = Vector3Add(camera.position, forward);
 
                 shootCooldown -= dt;
-                if (playerHealth > 0.0f && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && shootCooldown <= 0.0f) {
-                    shootCooldown = 0.12f;
+                if (playerHealth > 0.0f && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && shootCooldown <= 0.0f && !shopOpen && !inventoryOpen) {
+                    WeaponType currentWeapon = inventory[currentWeaponSlot].weapon;
+                    bool weaponOwned = inventory[currentWeaponSlot].owned;
 
-                    Vector3 muzzle = Vector3Add(camera.position, Vector3Scale(forward, 1.1f));
-                    muzzle.y -= 0.15f;
+                    if (weaponOwned) {
+                        if (currentWeapon == WeaponType::PotatoCannon) {
+                            float rateMultiplier = std::pow(0.9f, fireRateUpgradeCount);
+                            shootCooldown = 0.12f * rateMultiplier;
 
-                    Potato p{};
-                    p.pos = muzzle;
-                    p.vel = Vector3Scale(forward, 34.0f);
-                    p.life = 3.0f;
-                    potatoes.push_back(p);
+                            Vector3 muzzle = Vector3Add(camera.position, Vector3Scale(forward, 1.1f));
+                            muzzle.y -= 0.15f;
+
+                            Potato p{};
+                            p.pos = muzzle;
+                            p.vel = Vector3Scale(forward, 34.0f);
+                            p.life = 3.0f;
+                            potatoes.push_back(p);
+                        } else if (currentWeapon == WeaponType::PotatoShotgun) {
+                            shootCooldown = 0.5f;
+
+                            for (int i = 0; i < 8; ++i) {
+                                Vector3 muzzle = Vector3Add(camera.position, Vector3Scale(forward, 1.1f));
+                                muzzle.y -= 0.15f;
+
+                                Vector3 spread = forward;
+                                spread.x += RandRange(-0.08f, 0.08f);
+                                spread.y += RandRange(-0.06f, 0.06f);
+                                spread.z += RandRange(-0.08f, 0.08f);
+                                spread = Vector3Normalize(spread);
+
+                                Potato p{};
+                                p.pos = muzzle;
+                                p.vel = Vector3Scale(spread, 28.0f + RandRange(-3.0f, 3.0f));
+                                p.life = 2.0f;
+                                p.radius = 0.15f;
+                                potatoes.push_back(p);
+                            }
+                        } else if (currentWeapon == WeaponType::PotatoGrenade) {
+                            shootCooldown = 1.0f;
+
+                            Vector3 muzzle = Vector3Add(camera.position, Vector3Scale(forward, 1.1f));
+                            muzzle.y -= 0.15f;
+
+                            GrenadeProjectile g{};
+                            g.pos = muzzle;
+                            g.vel = Vector3Scale(forward, 20.0f);
+                            g.vel.y += 4.0f;
+                            g.fuseTimer = 2.0f;
+                            grenades.push_back(g);
+                        }
+                    }
                 }
             }
 
@@ -1379,6 +1506,92 @@ int main() {
                 }),
                 potatoes.end()
             );
+
+            // Update confetti particles
+            for (auto& cp : confetti) {
+                cp.life -= dt;
+                cp.vel.y -= 9.8f * dt;
+                cp.pos = Vector3Add(cp.pos, Vector3Scale(cp.vel, dt));
+            }
+            confetti.erase(
+                std::remove_if(confetti.begin(), confetti.end(), [](const ConfettiParticle& cp) {
+                    return cp.life <= 0.0f || cp.pos.y < -1.0f;
+                }),
+                confetti.end()
+            );
+
+            // Update grenades
+            for (auto& g : grenades) {
+                g.fuseTimer -= dt;
+                g.vel.y -= 12.0f * dt;
+                g.pos = Vector3Add(g.pos, Vector3Scale(g.vel, dt));
+
+                // Bounce off ground
+                if (g.pos.y < 0.3f) {
+                    g.pos.y = 0.3f;
+                    g.vel.y = std::abs(g.vel.y) * 0.3f;
+                    g.vel.x *= 0.7f;
+                    g.vel.z *= 0.7f;
+                }
+
+                if (g.fuseTimer <= 0.0f && !g.exploded) {
+                    g.exploded = true;
+                    // Damage all chickens in blast radius
+                    for (auto& c : chickens) {
+                        if (Vector3Distance(c.pos, g.pos) < g.blastRadius) {
+                            c.hp -= 50.0f;
+                        }
+                    }
+                    // Explosion confetti
+                    for (int i = 0; i < 30; ++i) {
+                        ConfettiParticle cp{};
+                        cp.pos = g.pos;
+                        cp.vel = {RandRange(-5.0f, 5.0f), RandRange(3.0f, 8.0f), RandRange(-5.0f, 5.0f)};
+                        cp.life = RandRange(0.5f, 1.2f);
+                        cp.color = {
+                            static_cast<unsigned char>(GetRandomValue(200, 255)),
+                            static_cast<unsigned char>(GetRandomValue(100, 200)),
+                            static_cast<unsigned char>(GetRandomValue(0, 50)),
+                            255
+                        };
+                        confetti.push_back(cp);
+                    }
+                }
+            }
+            grenades.erase(
+                std::remove_if(grenades.begin(), grenades.end(), [](const GrenadeProjectile& g) {
+                    return g.exploded;
+                }),
+                grenades.end()
+            );
+
+            // Update med packs
+            for (auto& mp : medPacks) {
+                mp.bobTimer += dt;
+                if (playerHealth > 0.0f && Vector3Distance(mp.pos, camera.position) < 1.5f) {
+                    playerHealth = 100.0f;
+                    mp.active = false;
+                }
+                if ((gameMode == GameMode::CoOp || gameMode == GameMode::Online) && coopHealth > 0.0f && Vector3Distance(mp.pos, coopPos) < 1.5f) {
+                    coopHealth = 100.0f;
+                    mp.active = false;
+                }
+            }
+            medPacks.erase(
+                std::remove_if(medPacks.begin(), medPacks.end(), [](const MedPack& mp) {
+                    return !mp.active;
+                }),
+                medPacks.end()
+            );
+
+            // Shop timer countdown
+            if (shopOpen) {
+                shopTimer -= dt;
+                if (shopTimer <= 0.0f) {
+                    shopOpen = false;
+                    startWave(wave + 1);
+                }
+            }
 
             waveSpawnCooldown -= dt;
             if (waveSpawned < waveTotalToSpawn && waveSpawnCooldown <= 0.0f) {
@@ -1476,6 +1689,29 @@ int main() {
                 }
             }
 
+            // Spawn confetti and drop nuggets for dying chickens
+            for (const auto& c : chickens) {
+                if (c.hp <= 0.0f) {
+                    // Red confetti explosion
+                    for (int i = 0; i < 20; ++i) {
+                        ConfettiParticle cp{};
+                        cp.pos = c.pos;
+                        cp.pos.y += 0.5f;
+                        cp.vel = {RandRange(-3.0f, 3.0f), RandRange(2.0f, 6.0f), RandRange(-3.0f, 3.0f)};
+                        cp.life = RandRange(0.8f, 1.5f);
+                        cp.color = {
+                            static_cast<unsigned char>(GetRandomValue(180, 255)),
+                            static_cast<unsigned char>(GetRandomValue(0, 60)),
+                            static_cast<unsigned char>(GetRandomValue(0, 40)),
+                            255
+                        };
+                        confetti.push_back(cp);
+                    }
+                    // Drop chicken nuggets
+                    chickenNuggets += c.isBrown ? 2 : 1;
+                }
+            }
+
             int before = static_cast<int>(chickens.size());
             chickens.erase(
                 std::remove_if(chickens.begin(), chickens.end(), [](const Chicken& c) {
@@ -1485,12 +1721,30 @@ int main() {
             );
             score += (before - static_cast<int>(chickens.size())) * 10;
 
-            if (chickens.empty() && waveSpawned >= waveTotalToSpawn) {
+            if (chickens.empty() && waveSpawned >= waveTotalToSpawn && !shopOpen) {
                 if (gameMode != GameMode::SinglePlayer) {
                     if (playerHealth <= 0.0f) playerHealth = 100.0f;
                     if (coopHealth <= 0.0f) coopHealth = 100.0f;
                 }
-                startWave(wave + 1);
+                // 25% chance to spawn med pack
+                if (GetRandomValue(1, 4) == 1) {
+                    MedPack mp{};
+                    float ang = RandRange(0.0f, 2.0f * PI);
+                    float dist = RandRange(5.0f, 15.0f);
+                    mp.pos = {camera.position.x + std::cos(ang) * dist, 0.5f, camera.position.z + std::sin(ang) * dist};
+                    medPacks.push_back(mp);
+                    if (gameMode != GameMode::SinglePlayer) {
+                        MedPack mp2{};
+                        float ang2 = RandRange(0.0f, 2.0f * PI);
+                        float dist2 = RandRange(5.0f, 15.0f);
+                        mp2.pos = {camera.position.x + std::cos(ang2) * dist2, 0.5f, camera.position.z + std::sin(ang2) * dist2};
+                        medPacks.push_back(mp2);
+                    }
+                }
+                // Open shop between waves
+                shopOpen = true;
+                shopTimer = shopDuration;
+                EnableCursor();
             }
 
             damageTick += dt;
@@ -1563,7 +1817,7 @@ int main() {
             );
         }
 
-        if (!dead && !paused && IsCursorHidden() == false) {
+        if (!dead && !paused && !shopOpen && !inventoryOpen && IsCursorHidden() == false) {
             DisableCursor();
         }
 
@@ -1837,6 +2091,28 @@ int main() {
             DrawSphere(ep.pos, ep.radius, {118, 76, 38, 255});
         }
 
+        // Draw confetti particles
+        for (const auto& cp : confetti) {
+            DrawCube(cp.pos, 0.08f, 0.08f, 0.08f, cp.color);
+        }
+
+        // Draw med packs
+        for (const auto& mp : medPacks) {
+            float bob = std::sin(mp.bobTimer * 2.0f) * 0.15f;
+            Vector3 drawPos = {mp.pos.x, mp.pos.y + bob + 0.5f, mp.pos.z};
+            // White box with red cross
+            DrawCube(drawPos, 0.6f, 0.6f, 0.6f, WHITE);
+            DrawCube(drawPos, 0.5f, 0.15f, 0.62f, RED);
+            DrawCube(drawPos, 0.15f, 0.5f, 0.62f, RED);
+            DrawCubeWires(drawPos, 0.62f, 0.62f, 0.62f, DARKGRAY);
+        }
+
+        // Draw grenades
+        for (const auto& g : grenades) {
+            DrawSphere(g.pos, 0.2f, DARKGREEN);
+            DrawSphereWires(g.pos, 0.21f, 8, 8, BLACK);
+        }
+
         Vector3 camForward = ForwardFromCamera(camera);
         Vector3 camRight = Vector3Normalize(Vector3CrossProduct(camForward, camera.up));
         Vector3 camUp = Vector3Normalize(Vector3CrossProduct(camRight, camForward));
@@ -1854,8 +2130,22 @@ int main() {
         Vector3 barrelStart = ToCameraLocal(0.26f, -0.24f, 0.95f);
         Vector3 barrelEnd = ToCameraLocal(0.26f, -0.24f, 1.46f);
 
-        DrawCylinderEx(gunStockTop, gunStockBottom, 0.09f, 0.13f, 14, DARKBROWN);
-        DrawCylinderEx(barrelStart, barrelEnd, 0.06f, 0.06f, 14, ScaleColor(GRAY, 0.75f + 0.4f * sunlight));
+        WeaponType heldWeapon = inventory[currentWeaponSlot].weapon;
+        if (heldWeapon == WeaponType::PotatoCannon) {
+            DrawCylinderEx(gunStockTop, gunStockBottom, 0.09f, 0.13f, 14, DARKBROWN);
+            DrawCylinderEx(barrelStart, barrelEnd, 0.06f, 0.06f, 14, ScaleColor(GRAY, 0.75f + 0.4f * sunlight));
+        } else if (heldWeapon == WeaponType::PotatoShotgun) {
+            DrawCylinderEx(gunStockTop, gunStockBottom, 0.11f, 0.15f, 14, DARKBROWN);
+            DrawCylinderEx(barrelStart, barrelEnd, 0.08f, 0.07f, 14, ScaleColor(DARKGRAY, 0.75f + 0.4f * sunlight));
+            // Double barrel
+            Vector3 barrel2Start = ToCameraLocal(0.22f, -0.22f, 0.95f);
+            Vector3 barrel2End = ToCameraLocal(0.22f, -0.22f, 1.40f);
+            DrawCylinderEx(barrel2Start, barrel2End, 0.05f, 0.05f, 14, ScaleColor(DARKGRAY, 0.70f + 0.4f * sunlight));
+        } else if (heldWeapon == WeaponType::PotatoGrenade) {
+            // Launcher tube
+            DrawCylinderEx(gunStockTop, gunStockBottom, 0.10f, 0.14f, 14, ScaleColor(DARKGREEN, 0.8f));
+            DrawCylinderEx(barrelStart, barrelEnd, 0.09f, 0.09f, 14, ScaleColor({60, 80, 60, 255}, 0.75f + 0.4f * sunlight));
+        }
 
         EndMode3D();
 
@@ -1877,10 +2167,11 @@ int main() {
         float myHealth = (netRole == NetRole::Client) ? coopHealth : playerHealth;
         float partnerHealth = (netRole == NetRole::Client) ? playerHealth : coopHealth;
 
-        DrawRectangle(20, 20, 340, 115, Fade(BLACK, 0.45f));
+        DrawRectangle(20, 20, 340, 145, Fade(BLACK, 0.45f));
         DrawText(TextFormat("HP: %i", static_cast<int>(myHealth)), 36, 35, 30, myHealth > 30.0f ? GREEN : RED);
         DrawText(TextFormat("Score: %i", score), 36, 67, 26, YELLOW);
         DrawText(TextFormat("Wave: %i", wave), 36, 96, 26, SKYBLUE);
+        DrawText(TextFormat("Nuggets: %i", chickenNuggets), 36, 126, 24, {255, 180, 50, 255});
 
         {
             int chickensRemaining;
@@ -1889,18 +2180,36 @@ int main() {
             } else {
                 chickensRemaining = static_cast<int>(chickens.size()) + std::max(0, waveTotalToSpawn - waveSpawned);
             }
-            DrawRectangle(20, 140, 340, 32, Fade(BLACK, 0.45f));
-            DrawText(TextFormat("Chickens Left: %i", chickensRemaining), 36, 146, 24, ORANGE);
+            DrawRectangle(20, 170, 340, 32, Fade(BLACK, 0.45f));
+            DrawText(TextFormat("Chickens Left: %i", chickensRemaining), 36, 176, 24, ORANGE);
         }
         if (gameMode == GameMode::CoOp || gameMode == GameMode::Online) {
-            DrawRectangle(20, 178, 340, 42, Fade(BLACK, 0.45f));
+            DrawRectangle(20, 208, 340, 42, Fade(BLACK, 0.45f));
             const char* coopLabel = (netRole == NetRole::Client) ? "HOST HP" : ((gameMode == GameMode::Online) ? "ONLINE HP" : "CO-OP HP");
-            DrawText(TextFormat("%s: %i", coopLabel, static_cast<int>(partnerHealth)), 36, 187, 28, partnerHealth > 30.0f ? SKYBLUE : ORANGE);
+            DrawText(TextFormat("%s: %i", coopLabel, static_cast<int>(partnerHealth)), 36, 217, 28, partnerHealth > 30.0f ? SKYBLUE : ORANGE);
         }
 
         if (gameMode == GameMode::Online) {
-            DrawRectangle(20, 226, 520, 36, Fade(BLACK, 0.45f));
-            DrawText(TextFormat("Online: %s", netStatus.empty() ? "Starting..." : netStatus.c_str()), 36, 234, 22, YELLOW);
+            DrawRectangle(20, 256, 520, 36, Fade(BLACK, 0.45f));
+            DrawText(TextFormat("Online: %s", netStatus.empty() ? "Starting..." : netStatus.c_str()), 36, 264, 22, YELLOW);
+        }
+
+        // Weapon indicator (bottom right)
+        {
+            const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade"};
+            const char* currentName = inventory[currentWeaponSlot].owned ? weaponNames[static_cast<int>(inventory[currentWeaponSlot].weapon)] : "Empty";
+            int nameW = MeasureText(currentName, 24);
+            DrawRectangle(screenWidth - nameW - 50, screenHeight - 72, nameW + 40, 32, Fade(BLACK, 0.45f));
+            DrawText(currentName, screenWidth - nameW - 30, screenHeight - 67, 24, RAYWHITE);
+            // Slot indicators
+            for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
+                int sx = screenWidth - 160 + i * 50;
+                int sy = screenHeight - 38;
+                Color slotColor = (i == currentWeaponSlot) ? YELLOW : (inventory[i].owned ? Fade(RAYWHITE, 0.6f) : Fade(GRAY, 0.4f));
+                DrawRectangle(sx, sy, 40, 28, Fade(BLACK, 0.45f));
+                DrawRectangleLines(sx, sy, 40, 28, slotColor);
+                DrawText(TextFormat("%i", i + 1), sx + 14, sy + 4, 20, slotColor);
+            }
         }
 
         if (!paused) {
@@ -1921,6 +2230,128 @@ int main() {
             const int bannerY = screenHeight / 3 - bannerH / 2;
             DrawRectangle(bannerX, bannerY, bannerW, bannerH, Fade(BLACK, 0.45f * alpha));
             DrawText(TextFormat("WAVE %i", wave), screenWidth / 2 - 90, bannerY + 20, 36, Fade(YELLOW, alpha));
+        }
+
+        // Shop screen
+        if (shopOpen && !dead && !paused) {
+            DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.3f));
+            int shopW = 620;
+            int shopH = 420;
+            int shopX = screenWidth / 2 - shopW / 2;
+            int shopY = screenHeight / 2 - shopH / 2;
+
+            DrawRectangle(shopX, shopY, shopW, shopH, Fade({10, 15, 25, 255}, 0.92f));
+            DrawRectangleLinesEx({static_cast<float>(shopX), static_cast<float>(shopY), static_cast<float>(shopW), static_cast<float>(shopH)}, 3, YELLOW);
+
+            DrawCenteredTextLine("SHOP", screenWidth / 2, shopY + 15, 42, YELLOW);
+            DrawCenteredTextLine(TextFormat("Nuggets: %i", chickenNuggets), screenWidth / 2, shopY + 62, 28, {255, 180, 50, 255});
+            DrawCenteredTextLine(TextFormat("Next wave in: %.1fs", std::max(0.0f, shopTimer)), screenWidth / 2, shopY + 94, 22, RAYWHITE);
+
+            Rectangle fireRateBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 130), static_cast<float>(shopW - 60), 50.0f};
+            Rectangle shotgunBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 195), static_cast<float>(shopW - 60), 50.0f};
+            Rectangle grenadeBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 260), static_cast<float>(shopW - 60), 50.0f};
+
+            Vector2 mp = GetMousePosition();
+            bool fireRateHover = CheckCollisionPointRec(mp, fireRateBtn);
+            bool shotgunHover = CheckCollisionPointRec(mp, shotgunBtn);
+            bool grenadeHover = CheckCollisionPointRec(mp, grenadeBtn);
+
+            // Fire rate upgrade
+            bool canBuyFireRate = (chickenNuggets >= 25);
+            DrawRectangleRounded(fireRateBtn, 0.2f, 8, fireRateHover ? Fade(GREEN, 0.4f) : Fade(GREEN, 0.2f));
+            DrawRectangleRoundedLines(fireRateBtn, 0.2f, 8, canBuyFireRate ? GREEN : GRAY);
+            DrawText(TextFormat("Upgrade Fire Rate +10%% [25 nuggets] (Level %i)", fireRateUpgradeCount), shopX + 42, shopY + 142, 22, canBuyFireRate ? RAYWHITE : Fade(RAYWHITE, 0.5f));
+
+            // Shotgun
+            bool ownsShotgun = inventory[1].owned;
+            bool canBuyShotgun = (!ownsShotgun && chickenNuggets >= 50);
+            Color sgColor = ownsShotgun ? GRAY : ORANGE;
+            DrawRectangleRounded(shotgunBtn, 0.2f, 8, shotgunHover ? Fade(sgColor, 0.4f) : Fade(sgColor, 0.2f));
+            DrawRectangleRoundedLines(shotgunBtn, 0.2f, 8, canBuyShotgun ? ORANGE : GRAY);
+            DrawText(ownsShotgun ? "Potato Shotgun [OWNED]" : "Potato Shotgun [50 nuggets]", shopX + 42, shopY + 207, 22, (ownsShotgun || canBuyShotgun) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
+
+            // Grenade
+            bool ownsGrenade = inventory[2].owned;
+            bool canBuyGrenade = (!ownsGrenade && chickenNuggets >= 50);
+            Color grColor = ownsGrenade ? GRAY : SKYBLUE;
+            DrawRectangleRounded(grenadeBtn, 0.2f, 8, grenadeHover ? Fade(grColor, 0.4f) : Fade(grColor, 0.2f));
+            DrawRectangleRoundedLines(grenadeBtn, 0.2f, 8, canBuyGrenade ? SKYBLUE : GRAY);
+            DrawText(ownsGrenade ? "Potato Grenade [OWNED]" : "Potato Grenade [50 nuggets]", shopX + 42, shopY + 272, 22, (ownsGrenade || canBuyGrenade) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
+
+            // Handle purchases
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                if (fireRateHover && canBuyFireRate) {
+                    chickenNuggets -= 25;
+                    fireRateUpgradeCount++;
+                }
+                if (shotgunHover && canBuyShotgun) {
+                    chickenNuggets -= 50;
+                    inventory[1].owned = true;
+                }
+                if (grenadeHover && canBuyGrenade) {
+                    chickenNuggets -= 50;
+                    inventory[2].owned = true;
+                }
+            }
+
+            DrawCenteredTextLine("Click to buy  |  Shop closes automatically", screenWidth / 2, shopY + shopH - 50, 20, Fade(RAYWHITE, 0.6f));
+            DrawCenteredTextLine("Press 1/2/3 to switch weapons after buying", screenWidth / 2, shopY + shopH - 28, 18, Fade(RAYWHITE, 0.5f));
+        }
+
+        // Inventory screen
+        if (inventoryOpen && !dead && !shopOpen && !paused) {
+            DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.3f));
+            int invW = 520;
+            int invH = 300;
+            int invX = screenWidth / 2 - invW / 2;
+            int invY = screenHeight / 2 - invH / 2;
+
+            DrawRectangle(invX, invY, invW, invH, Fade({10, 15, 25, 255}, 0.92f));
+            DrawRectangleLinesEx({static_cast<float>(invX), static_cast<float>(invY), static_cast<float>(invW), static_cast<float>(invH)}, 3, SKYBLUE);
+            DrawCenteredTextLine("INVENTORY  (Press E to close)", screenWidth / 2, invY + 12, 28, SKYBLUE);
+            DrawCenteredTextLine("Click a slot to select, then click another to swap", screenWidth / 2, invY + 46, 18, Fade(RAYWHITE, 0.6f));
+
+            const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade"};
+            Vector2 mp = GetMousePosition();
+
+            for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
+                float slotX = static_cast<float>(invX) + 30.0f + i * 160.0f;
+                float slotY = static_cast<float>(invY) + 80.0f;
+                Rectangle slotRect = {slotX, slotY, 145.0f, 170.0f};
+
+                bool hover = CheckCollisionPointRec(mp, slotRect);
+                bool selected = (i == currentWeaponSlot);
+                bool isSwapSource = (i == inventorySwapFrom);
+
+                Color borderColor = isSwapSource ? GREEN : (selected ? YELLOW : (hover ? SKYBLUE : Fade(RAYWHITE, 0.4f)));
+                DrawRectangleRounded(slotRect, 0.12f, 8, Fade({20, 30, 50, 255}, 0.9f));
+                DrawRectangleRoundedLines(slotRect, 0.12f, 8, borderColor);
+
+                DrawText(TextFormat("[%i]", i + 1), static_cast<int>(slotX) + 10, static_cast<int>(slotY) + 10, 22, YELLOW);
+
+                if (inventory[i].owned) {
+                    // Word wrap weapon name in small area
+                    DrawText(weaponNames[static_cast<int>(inventory[i].weapon)], static_cast<int>(slotX) + 10, static_cast<int>(slotY) + 45, 18, RAYWHITE);
+                } else {
+                    DrawText("Empty", static_cast<int>(slotX) + 10, static_cast<int>(slotY) + 45, 18, GRAY);
+                }
+
+                if (selected) {
+                    DrawText("ACTIVE", static_cast<int>(slotX) + 10, static_cast<int>(slotY) + 140, 16, YELLOW);
+                }
+                if (isSwapSource) {
+                    DrawText("SWAP", static_cast<int>(slotX) + 75, static_cast<int>(slotY) + 140, 16, GREEN);
+                }
+
+                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hover) {
+                    if (inventorySwapFrom < 0) {
+                        inventorySwapFrom = i;
+                    } else {
+                        std::swap(inventory[i], inventory[inventorySwapFrom]);
+                        inventorySwapFrom = -1;
+                    }
+                }
+            }
         }
 
         if (!dead && gameMode != GameMode::SinglePlayer) {
