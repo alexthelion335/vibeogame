@@ -1,7 +1,17 @@
 #!/bin/bash
 set -e
 
+# Detect number of CPU cores for parallel compilation
+if command -v nproc &> /dev/null; then
+    NUM_CORES=$(nproc)
+elif command -v sysctl &> /dev/null; then
+    NUM_CORES=$(sysctl -n hw.ncpu)
+else
+    NUM_CORES=4
+fi
+
 echo "Building for HTML5/WebAssembly..."
+echo "Using ${NUM_CORES} parallel jobs for compilation"
 
 # Check if emscripten is available
 if ! command -v emcc &> /dev/null; then
@@ -23,7 +33,7 @@ emcmake cmake -S . -B build-web \
     -DPLATFORM=Web
 
 # Build
-cmake --build build-web --config Release
+cmake --build build-web --config Release --parallel ${NUM_CORES}
 
 echo ""
 echo "Build completed successfully!"

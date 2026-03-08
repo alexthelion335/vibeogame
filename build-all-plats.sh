@@ -10,6 +10,16 @@ fi
 
 # Source Android build variables
 set -euo pipefail
+
+# Detect number of CPU cores for parallel compilation
+if command -v nproc &> /dev/null; then
+    NUM_CORES=$(nproc)
+elif command -v sysctl &> /dev/null; then
+    NUM_CORES=$(sysctl -n hw.ncpu)
+else
+    NUM_CORES=4
+fi
+echo "Using ${NUM_CORES} parallel jobs for compilation"
 export ANDROID_NDK=/opt/android-ndk
 export ANDROID_SDK=~/Android/Sdk
 export ANDROID_ABI=arm64-v8a  # or armeabi-v7a, x86, x86_64
@@ -22,10 +32,10 @@ if [ ! -f "$NATIVE_APP_GLUE" ]; then
 fi
 echo "Building for Windows..."
 cmake -S . -B build-windows -DCMAKE_BUILD_TYPE=Release
-cmake --build build-windows --config Release
+cmake --build build-windows --config Release --parallel ${NUM_CORES}
 echo "Building for Linux..."
 cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
-cmake --build build-linux --config Release
+cmake --build build-linux --config Release --parallel ${NUM_CORES}
 echo "Building for Web/HTML5..."
 if command -v emcc &> /dev/null; then
     ./build-web.sh
