@@ -2,9 +2,13 @@
 #include <raymath.h>
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -294,6 +298,62 @@ static void DrawMenuCard(Rectangle rect,
              selected ? Fade(accent, 0.95f) : Fade(RAYWHITE, 0.82f));
 }
 
+struct HighscoreEntry {
+    std::string initials = "---";
+    int score = 0;
+};
+
+constexpr int MAX_HIGHSCORES = 8;
+
+static std::array<HighscoreEntry, MAX_HIGHSCORES> LoadHighscores(const char* path) {
+    std::array<HighscoreEntry, MAX_HIGHSCORES> scores{};
+    for (auto& entry : scores) {
+        entry = {"---", 0};
+    }
+
+    std::ifstream in(path);
+    if (!in.is_open()) {
+        return scores;
+    }
+
+    std::string line;
+    int idx = 0;
+    while (idx < MAX_HIGHSCORES && std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::istringstream iss(line);
+        std::string initials;
+        int entryScore = 0;
+        if (!(iss >> initials >> entryScore)) {
+            continue;
+        }
+        if (initials.empty()) {
+            initials = "---";
+        }
+        for (char& ch : initials) {
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+        if (initials.size() > 3) initials = initials.substr(0, 3);
+        while (initials.size() < 3) initials.push_back('-');
+        scores[idx++] = {initials, std::max(0, entryScore)};
+    }
+
+    std::sort(scores.begin(), scores.end(), [](const HighscoreEntry& a, const HighscoreEntry& b) {
+        return a.score > b.score;
+    });
+    return scores;
+}
+
+static void SaveHighscores(const std::array<HighscoreEntry, MAX_HIGHSCORES>& scores, const char* path) {
+    std::ofstream out(path, std::ios::trunc);
+    if (!out.is_open()) {
+        return;
+    }
+
+    for (const auto& entry : scores) {
+        out << entry.initials << ' ' << entry.score << '\n';
+    }
+}
+
 int main() {
 #ifdef _WIN32
     // Initialize Winsock
@@ -460,6 +520,22 @@ int main() {
     int currentWeaponSlot = 0;
     int fireRateUpgradeCount = 0;
 
+    bool hasShieldCharge = false;
+    bool shieldActive = false;
+    float shieldTimer = 0.0f;
+    constexpr float shieldDuration = 10.0f;
+
+    bool ownsScythe = false;
+    float scytheCooldown = 0.0f;
+    float scytheSwingVisualTimer = 0.0f;
+
+    const char* highscoreFilePath = "highscores.txt";
+    std::array<HighscoreEntry, MAX_HIGHSCORES> highscores = LoadHighscores(highscoreFilePath);
+    bool highscoreSubmittedThisRun = false;
+    bool enteringInitials = false;
+    std::string pendingInitials = "AAA";
+    bool viewingHighscores = false;
+
     bool shopOpen = false;
     float shopTimer = 0.0f;
     constexpr float shopDuration = 10.0f;
@@ -566,6 +642,16 @@ int main() {
         grenades.clear();
         currentWeaponSlot = 0;
         fireRateUpgradeCount = 0;
+        hasShieldCharge = false;
+        shieldActive = false;
+        shieldTimer = 0.0f;
+        ownsScythe = false;
+        scytheCooldown = 0.0f;
+        scytheSwingVisualTimer = 0.0f;
+        highscoreSubmittedThisRun = false;
+        enteringInitials = false;
+        pendingInitials = "AAA";
+        viewingHighscores = false;
         shopOpen = false;
         shopTimer = 0.0f;
         inventoryOpen = false;
@@ -574,6 +660,30 @@ int main() {
         inventory[1] = {WeaponType::PotatoShotgun, false};
         inventory[2] = {WeaponType::PotatoGrenade, false};
         startWave(1);
+    };
+
+    auto scoreQualifiesForHighscore = [&](int candidateScore) {
+        return candidateScore > 0 && candidateScore > highscores.back().score;
+    };
+
+    auto submitHighscore = [&]() {
+        std::string fixed = pendingInitials;
+        for (char& ch : fixed) {
+            if (!std::isalpha(static_cast<unsigned char>(ch))) {
+                ch = 'A';
+            }
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+        }
+        while (fixed.size() < 3) fixed.push_back('A');
+        if (fixed.size() > 3) fixed = fixed.substr(0, 3);
+
+        highscores.back() = {fixed, score};
+        std::sort(highscores.begin(), highscores.end(), [](const HighscoreEntry& a, const HighscoreEntry& b) {
+            return a.score > b.score;
+        });
+        SaveHighscores(highscores, highscoreFilePath);
+        highscoreSubmittedThisRun = true;
+        enteringInitials = false;
     };
 
     auto applyResolutionIndex = [&](int newIndex) {
@@ -1226,15 +1336,50 @@ int main() {
                 ShowCursor();
             }
 
+            // View highscores mode
+            if (viewingHighscores) {
+                if (IsKeyPressed(KEY_ESCAPE)) {
+                    viewingHighscores = false;
+                    continue;
+                }
+
+                BeginDrawing();
+                DrawRectangleGradientV(0, 0, screenWidth, screenHeight, {94, 170, 240, 255}, {48, 92, 148, 255});
+
+                int hsW = 560;
+                int hsH = 520;
+                int hsX = screenWidth / 2 - hsW / 2;
+                int hsY = screenHeight / 2 - hsH / 2;
+
+                DrawRectangleRounded({static_cast<float>(hsX), static_cast<float>(hsY), static_cast<float>(hsW), static_cast<float>(hsH)}, 0.04f, 12, Fade({8, 14, 22, 255}, 0.86f));
+                DrawRectangleRoundedLines({static_cast<float>(hsX), static_cast<float>(hsY), static_cast<float>(hsW), static_cast<float>(hsH)}, 0.04f, 12, Fade(SKYBLUE, 0.8f));
+
+                DrawCenteredTextLine("HIGHSCORES", screenWidth / 2, hsY + 28, 48, YELLOW);
+
+                int y = hsY + 80;
+                const int lineHeight = 40;
+                for (int i = 0; i < MAX_HIGHSCORES; ++i) {
+                    const auto& entry = highscores[i];
+                    DrawText(TextFormat("%d.  %s  %d", i + 1, entry.initials.c_str(), entry.score),
+                             hsX + 60, y, 24, (entry.score > 0) ? RAYWHITE : GRAY);
+                    y += lineHeight;
+                }
+
+                DrawCenteredTextLine("Press ESCAPE to return", screenWidth / 2, hsY + hsH - 40, 20, Fade(RAYWHITE, 0.8f));
+                EndDrawing();
+                continue;
+            }
+
             const int introW = std::min(960, std::max(620, screenWidth - 180));
-            const int introH = 520;
+            const int introH = 600;
             const int introX = screenWidth / 2 - introW / 2;
             const int introY = screenHeight / 2 - introH / 2;
             const int centerX = introX + introW / 2;
 
-            Rectangle singleRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 150), static_cast<float>(introW - 96), 90.0f};
-            Rectangle coopRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 256), static_cast<float>(introW - 96), 90.0f};
-            Rectangle onlineRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 362), static_cast<float>(introW - 96), 90.0f};
+            Rectangle singleRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 140), static_cast<float>(introW - 96), 80.0f};
+            Rectangle coopRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 232), static_cast<float>(introW - 96), 80.0f};
+            Rectangle onlineRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 324), static_cast<float>(introW - 96), 80.0f};
+            Rectangle highscoreRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 416), static_cast<float>(introW - 96), 80.0f};
 
             if (IsKeyPressed(KEY_ESCAPE)) {
                 shouldExit = true;
@@ -1245,10 +1390,12 @@ int main() {
             const bool singleHover = CheckCollisionPointRec(mousePos, singleRect);
             const bool coopHover = CheckCollisionPointRec(mousePos, coopRect);
             const bool onlineHover = CheckCollisionPointRec(mousePos, onlineRect);
+            const bool highscoreHover = CheckCollisionPointRec(mousePos, highscoreRect);
 
             if (singleHover) introSelection = 0;
             else if (coopHover) introSelection = 1;
             else if (onlineHover) introSelection = 2;
+            else if (highscoreHover) introSelection = 3;
 
             GameMode selectedMode = GameMode::SinglePlayer;
             bool startSelectedMode = false;
@@ -1265,6 +1412,8 @@ int main() {
                 } else if (onlineHover) {
                     introSelection = 2;
                     openOnlineSetup = true;
+                } else if (highscoreHover) {
+                    viewingHighscores = true;
                 }
             }
 
@@ -1298,6 +1447,7 @@ int main() {
             DrawMenuCard(singleRect, "Singleplayer", "Solo survival against endless chickens", introSelection == 0, singleHover, {255, 224, 85, 255});
             DrawMenuCard(coopRect, "Local Co-op", "Player 2: IJKL + Right Shift + Right Ctrl", introSelection == 1, coopHover, {118, 215, 255, 255});
             DrawMenuCard(onlineRect, "Online Multiplayer", "Host or join over LAN/Internet (UDP 42069)", introSelection == 2, onlineHover, {173, 135, 255, 255});
+            DrawMenuCard(highscoreRect, "Highscores", "View top scores and initials", introSelection == 3, highscoreHover, {200, 150, 255, 255});
 
             DrawCenteredTextLine("Mouse: hover + click button   |   Esc: Quit", centerX, introY + introH - 34, 20, Fade(RAYWHITE, 0.85f));
             EndDrawing();
@@ -1514,6 +1664,35 @@ int main() {
         }
 
         if (dead) {
+            if (!highscoreSubmittedThisRun && scoreQualifiesForHighscore(score)) {
+                enteringInitials = true;
+
+                int key = GetCharPressed();
+                while (key > 0) {
+                    if (key >= 'a' && key <= 'z') key = key - 'a' + 'A';
+                    if (key >= 'A' && key <= 'Z') {
+                        pendingInitials.push_back(static_cast<char>(key));
+                        if (pendingInitials.size() > 3) {
+                            pendingInitials.erase(pendingInitials.begin());
+                        }
+                    }
+                    key = GetCharPressed();
+                }
+
+                if (IsKeyPressed(KEY_BACKSPACE) && !pendingInitials.empty()) {
+                    pendingInitials.pop_back();
+                }
+                while (pendingInitials.size() < 3) {
+                    pendingInitials.push_back('A');
+                }
+
+                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
+                    submitHighscore();
+                }
+            } else {
+                enteringInitials = false;
+            }
+
             if (IsKeyPressed(KEY_R)) {
                 resetGame();
             }
@@ -1727,7 +1906,53 @@ int main() {
                 camera.target = Vector3Add(camera.position, forward);
 
                 shootCooldown -= dt;
-                
+                scytheCooldown = std::max(0.0f, scytheCooldown - dt);
+                scytheSwingVisualTimer = std::max(0.0f, scytheSwingVisualTimer - dt);
+
+                if (shieldActive) {
+                    shieldTimer -= dt;
+                    if (shieldTimer <= 0.0f) {
+                        shieldTimer = 0.0f;
+                        shieldActive = false;
+                    }
+                }
+
+#ifndef PLATFORM_ANDROID
+                if (playerHealth > 0.0f && hasShieldCharge && !shieldActive && !shopOpen && !inventoryOpen && IsKeyPressed(KEY_Q)) {
+                    hasShieldCharge = false;
+                    shieldActive = true;
+                    shieldTimer = shieldDuration;
+                }
+
+                if (playerHealth > 0.0f && ownsScythe && scytheCooldown <= 0.0f && !shopOpen && !inventoryOpen && IsKeyPressed(KEY_F)) {
+                    scytheCooldown = 1.1f;
+                    scytheSwingVisualTimer = 0.18f;
+
+                    Vector3 meleeCenter = camera.position;
+                    meleeCenter.y = 0.7f;
+                    Vector3 aimDir = forward;
+                    aimDir.y = 0.0f;
+                    if (Vector3Length(aimDir) < 0.001f) {
+                        aimDir = {0.0f, 0.0f, 1.0f};
+                    } else {
+                        aimDir = Vector3Normalize(aimDir);
+                    }
+
+                    for (auto& c : chickens) {
+                        if (c.hp <= 0.0f) continue;
+                        Vector3 toChicken = Vector3Subtract(c.pos, meleeCenter);
+                        toChicken.y = 0.0f;
+                        float dist = Vector3Length(toChicken);
+                        if (dist > 5.1f || dist < 0.001f) continue;
+                        Vector3 toDir = Vector3Scale(toChicken, 1.0f / dist);
+                        float facing = Vector3DotProduct(toDir, aimDir);
+                        if (facing >= 0.15f) {
+                            c.hp -= 80.0f;
+                        }
+                    }
+                }
+#endif
+
                 // Shooting handling
 #ifdef PLATFORM_ANDROID
                 bool shootDown = touchControls.shootButton.pressed;
@@ -1899,10 +2124,10 @@ int main() {
 
                 if (g.fuseTimer <= 0.0f && !g.exploded) {
                     g.exploded = true;
-                    // Damage all chickens in blast radius
+                    // Kill all chickens in blast radius
                     for (auto& c : chickens) {
                         if (Vector3Distance(c.pos, g.pos) < g.blastRadius) {
-                            c.hp -= 50.0f;
+                            c.hp = 0.0f;
                         }
                     }
                     // Explosion confetti
@@ -2020,15 +2245,17 @@ int main() {
                 ep.pos = Vector3Add(ep.pos, Vector3Scale(ep.vel, dt));
                 if (playerHealth > 0.0f && Vector3Distance(ep.pos, camera.position) < 0.55f) {
                     ep.life = 0.0f;
-                    float prevHealth = playerHealth;
-                    playerHealth -= 11.0f;
-                    if (prevHealth > 0.0f && playerHealth <= 0.0f) {
-                        deathCause = DeathCause::Potato;
+                    if (!shieldActive) {
+                        float prevHealth = playerHealth;
+                        playerHealth -= 11.0f;
+                        if (prevHealth > 0.0f && playerHealth <= 0.0f) {
+                            deathCause = DeathCause::Potato;
+                        }
+                        // Knockback from potato direction
+                        Vector3 kb = Vector3Normalize(Vector3Subtract(camera.position, ep.pos));
+                        knockbackVel = Vector3Add(knockbackVel, Vector3Scale(kb, 6.0f));
+                        damageFlashTimer = 0.35f;
                     }
-                    // Knockback from potato direction
-                    Vector3 kb = Vector3Normalize(Vector3Subtract(camera.position, ep.pos));
-                    knockbackVel = Vector3Add(knockbackVel, Vector3Scale(kb, 6.0f));
-                    damageFlashTimer = 0.35f;
                 } else if ((gameMode == GameMode::CoOp || gameMode == GameMode::Online) && coopHealth > 0.0f && Vector3Distance(ep.pos, coopPos) < 0.62f) {
                     ep.life = 0.0f;
                     coopHealth -= 11.0f;
@@ -2118,15 +2345,17 @@ int main() {
                     Vector3 toP1 = Vector3Subtract(camera.position, c.pos);
                     toP1.y = 0.0f;
                     if (playerHealth > 0.0f && Vector3Length(toP1) < 1.35f) {
-                        float prevHealth = playerHealth;
-                        playerHealth -= 4.0f;
-                        if (prevHealth > 0.0f && playerHealth <= 0.0f) {
-                            deathCause = DeathCause::Peck;
+                        if (!shieldActive) {
+                            float prevHealth = playerHealth;
+                            playerHealth -= 4.0f;
+                            if (prevHealth > 0.0f && playerHealth <= 0.0f) {
+                                deathCause = DeathCause::Peck;
+                            }
+                            // Knockback away from chicken
+                            Vector3 kb = Vector3Normalize(toP1);
+                            knockbackVel = Vector3Add(knockbackVel, Vector3Scale(kb, 4.0f));
+                            damageFlashTimer = 0.3f;
                         }
-                        // Knockback away from chicken
-                        Vector3 kb = Vector3Normalize(toP1);
-                        knockbackVel = Vector3Add(knockbackVel, Vector3Scale(kb, 4.0f));
-                        damageFlashTimer = 0.3f;
                     }
                     if ((gameMode == GameMode::CoOp || gameMode == GameMode::Online) && coopHealth > 0.0f) {
                         Vector3 toP2 = Vector3Subtract(coopPos, c.pos);
@@ -2512,6 +2741,40 @@ int main() {
             DrawCylinderEx(barrelStart, barrelEnd, 0.09f, 0.09f, 14, ScaleColor({60, 80, 60, 255}, 0.75f + 0.4f * sunlight));
         }
 
+        // Draw scythe during attack animation
+        if (scytheSwingVisualTimer > 0.0f && ownsScythe) {
+            float swingProgress = 1.0f - (scytheSwingVisualTimer / 0.18f);
+            float swingAngle = swingProgress * PI * 1.5f + PI;
+            
+            Vector3 scytheBase = camera.position;
+            scytheBase = Vector3Add(scytheBase, Vector3Scale(camForward, 1.2f));
+            scytheBase.y = 0.8f;
+            
+            Vector3 right = Vector3Normalize(Vector3CrossProduct(camForward, camera.up));
+            Vector3 up = camera.up;
+            
+            Vector3 rotatedForward = {
+                camForward.x * std::cos(swingAngle) - right.x * std::sin(swingAngle),
+                camForward.y * std::cos(swingAngle) - right.y * std::sin(swingAngle),
+                camForward.z * std::cos(swingAngle) - right.z * std::sin(swingAngle)
+            };
+            rotatedForward = Vector3Normalize(rotatedForward);
+            
+            Vector3 scytheTip = Vector3Add(scytheBase, Vector3Scale(rotatedForward, 2.2f));
+            
+            DrawCylinderEx(scytheBase, scytheTip, 0.08f, 0.06f, 10, {139, 90, 43, 255});
+            
+            Vector3 bladeCenter = scytheTip;
+            Vector3 bladeRight = Vector3Normalize(Vector3CrossProduct(rotatedForward, up));
+            Vector3 bladeTip = Vector3Add(bladeCenter, Vector3Scale(bladeRight, 0.9f));
+            Vector3 bladeTipOpposite = Vector3Subtract(bladeCenter, Vector3Scale(bladeRight, 0.9f));
+            
+            DrawTriangle3D(scytheTip, bladeTip, Vector3Add(scytheTip, Vector3Scale(up, 0.3f)), {192, 192, 192, 255});
+            DrawTriangle3D(scytheTip, Vector3Add(scytheTip, Vector3Scale(up, 0.3f)), bladeTipOpposite, {192, 192, 192, 255});
+            DrawTriangle3D(scytheTip, bladeTipOpposite, Vector3Subtract(scytheTip, Vector3Scale(up, 0.3f)), {200, 200, 200, 255});
+            DrawTriangle3D(scytheTip, Vector3Subtract(scytheTip, Vector3Scale(up, 0.3f)), bladeTip, {200, 200, 200, 255});
+        }
+
         EndMode3D();
 
         // Red damage flash vignette
@@ -2561,7 +2824,7 @@ int main() {
 
         // Weapon indicator (bottom right)
         {
-            const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade"};
+            const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade Launcher"};
             const char* currentName = inventory[currentWeaponSlot].owned ? weaponNames[static_cast<int>(inventory[currentWeaponSlot].weapon)] : "Empty";
             int nameW = MeasureText(currentName, 24);
             DrawRectangle(screenWidth - nameW - 50, screenHeight - 72, nameW + 40, 32, Fade(BLACK, 0.45f));
@@ -2575,6 +2838,20 @@ int main() {
                 DrawRectangleLines(sx, sy, 40, 28, slotColor);
                 DrawText(TextFormat("%i", i + 1), sx + 14, sy + 4, 20, slotColor);
             }
+        }
+
+        if (shieldActive) {
+            float shieldAlpha = Clamp(shieldTimer / shieldDuration, 0.0f, 1.0f) * 0.4f;
+            DrawRectangle(0, 0, screenWidth, screenHeight, Fade(VIOLET, shieldAlpha * 0.18f));
+            int px = screenWidth / 2;
+            int py = screenHeight / 4;
+            DrawText(TextFormat("SHIELD [%.1fs]", std::max(0.0f, shieldTimer)), px - 90, py, 32, VIOLET);
+        }
+
+        if (scytheSwingVisualTimer > 0.0f && ownsScythe) {
+            float swingProgress = 1.0f - (scytheSwingVisualTimer / 0.18f);
+            float swingAlpha = Clamp(0.6f - swingProgress * 0.6f, 0.2f, 0.6f);
+            DrawRectangle(0, 0, screenWidth, screenHeight, Fade(RED, swingAlpha * 0.1f));
         }
 
         if (!paused) {
@@ -2605,8 +2882,8 @@ int main() {
         // Shop screen
         if (shopOpen && !dead && !paused) {
             DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.3f));
-            int shopW = 620;
-            int shopH = 420;
+            int shopW = 700;
+            int shopH = 560;
             int shopX = screenWidth / 2 - shopW / 2;
             int shopY = screenHeight / 2 - shopH / 2;
 
@@ -2620,11 +2897,15 @@ int main() {
             Rectangle fireRateBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 130), static_cast<float>(shopW - 60), 50.0f};
             Rectangle shotgunBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 195), static_cast<float>(shopW - 60), 50.0f};
             Rectangle grenadeBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 260), static_cast<float>(shopW - 60), 50.0f};
+            Rectangle shieldBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 325), static_cast<float>(shopW - 60), 50.0f};
+            Rectangle scytheBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 390), static_cast<float>(shopW - 60), 50.0f};
 
             Vector2 mp = GetMousePosition();
             bool fireRateHover = CheckCollisionPointRec(mp, fireRateBtn);
             bool shotgunHover = CheckCollisionPointRec(mp, shotgunBtn);
             bool grenadeHover = CheckCollisionPointRec(mp, grenadeBtn);
+            bool shieldHover = CheckCollisionPointRec(mp, shieldBtn);
+            bool scytheHover = CheckCollisionPointRec(mp, scytheBtn);
 
             // Fire rate upgrade
             bool canBuyFireRate = (chickenNuggets >= 25);
@@ -2640,13 +2921,30 @@ int main() {
             DrawRectangleRoundedLines(shotgunBtn, 0.2f, 8, canBuyShotgun ? ORANGE : GRAY);
             DrawText(ownsShotgun ? "Potato Shotgun [OWNED]" : "Potato Shotgun [50 nuggets]", shopX + 42, shopY + 207, 22, (ownsShotgun || canBuyShotgun) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
 
-            // Grenade
+            // Grenade launcher
             bool ownsGrenade = inventory[2].owned;
             bool canBuyGrenade = (!ownsGrenade && chickenNuggets >= 50);
             Color grColor = ownsGrenade ? GRAY : SKYBLUE;
             DrawRectangleRounded(grenadeBtn, 0.2f, 8, grenadeHover ? Fade(grColor, 0.4f) : Fade(grColor, 0.2f));
             DrawRectangleRoundedLines(grenadeBtn, 0.2f, 8, canBuyGrenade ? SKYBLUE : GRAY);
-            DrawText(ownsGrenade ? "Potato Grenade [OWNED]" : "Potato Grenade [50 nuggets]", shopX + 42, shopY + 272, 22, (ownsGrenade || canBuyGrenade) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
+            DrawText(ownsGrenade ? "Potato Grenade Launcher [OWNED]" : "Potato Grenade Launcher [50 nuggets]", shopX + 42, shopY + 272, 22, (ownsGrenade || canBuyGrenade) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
+
+            // Shield (consumable)
+            bool canBuyShield = (!hasShieldCharge && !shieldActive && chickenNuggets >= 40);
+            Color shColor = (hasShieldCharge || shieldActive) ? GRAY : VIOLET;
+            DrawRectangleRounded(shieldBtn, 0.2f, 8, shieldHover ? Fade(shColor, 0.4f) : Fade(shColor, 0.2f));
+            DrawRectangleRoundedLines(shieldBtn, 0.2f, 8, canBuyShield ? VIOLET : GRAY);
+            const char* shieldLabel = shieldActive
+                                          ? "Shield [ACTIVE 10s]"
+                                          : (hasShieldCharge ? "Shield [READY: Press Q]" : "Shield [40 nuggets] (One-use, 10s)");
+            DrawText(shieldLabel, shopX + 42, shopY + 337, 22, (canBuyShield || hasShieldCharge || shieldActive) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
+
+            // Scythe unlock
+            bool canBuyScythe = (!ownsScythe && chickenNuggets >= 75);
+            Color scColor = ownsScythe ? GRAY : RED;
+            DrawRectangleRounded(scytheBtn, 0.2f, 8, scytheHover ? Fade(scColor, 0.4f) : Fade(scColor, 0.2f));
+            DrawRectangleRoundedLines(scytheBtn, 0.2f, 8, canBuyScythe ? RED : GRAY);
+            DrawText(ownsScythe ? "Potato Scythe [OWNED]" : "Potato Scythe [75 nuggets]", shopX + 42, shopY + 402, 22, (ownsScythe || canBuyScythe) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
 
             // Handle purchases
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -2662,16 +2960,24 @@ int main() {
                     chickenNuggets -= 50;
                     inventory[2].owned = true;
                 }
+                if (shieldHover && canBuyShield) {
+                    chickenNuggets -= 40;
+                    hasShieldCharge = true;
+                }
+                if (scytheHover && canBuyScythe) {
+                    chickenNuggets -= 75;
+                    ownsScythe = true;
+                }
             }
 
             DrawCenteredTextLine("Click to buy  |  Shop closes automatically", screenWidth / 2, shopY + shopH - 50, 20, Fade(RAYWHITE, 0.6f));
-            DrawCenteredTextLine("Press 1/2/3 to switch weapons after buying", screenWidth / 2, shopY + shopH - 28, 18, Fade(RAYWHITE, 0.5f));
+            DrawCenteredTextLine("Press 1/2/3 weapons, Q shield, F scythe", screenWidth / 2, shopY + shopH - 28, 18, Fade(RAYWHITE, 0.5f));
         }
 
         // Inventory screen
         if (inventoryOpen && !dead && !shopOpen && !paused) {
             DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.3f));
-            int invW = 520;
+            int invW = 680;
             int invH = 300;
             int invX = screenWidth / 2 - invW / 2;
             int invY = screenHeight / 2 - invH / 2;
@@ -2681,11 +2987,11 @@ int main() {
             DrawCenteredTextLine("INVENTORY  (Press E to close)", screenWidth / 2, invY + 12, 28, SKYBLUE);
             DrawCenteredTextLine("Click a slot to select, then click another to swap", screenWidth / 2, invY + 46, 18, Fade(RAYWHITE, 0.6f));
 
-            const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade"};
+            const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade Launcher"};
             Vector2 mp = GetMousePosition();
 
             for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
-                float slotX = static_cast<float>(invX) + 30.0f + i * 160.0f;
+                float slotX = static_cast<float>(invX) + 20.0f + i * 160.0f;
                 float slotY = static_cast<float>(invY) + 80.0f;
                 Rectangle slotRect = {slotX, slotY, 145.0f, 170.0f};
 
@@ -2700,7 +3006,6 @@ int main() {
                 DrawText(TextFormat("[%i]", i + 1), static_cast<int>(slotX) + 10, static_cast<int>(slotY) + 10, 22, YELLOW);
 
                 if (inventory[i].owned) {
-                    // Word wrap weapon name in small area
                     DrawText(weaponNames[static_cast<int>(inventory[i].weapon)], static_cast<int>(slotX) + 10, static_cast<int>(slotY) + 45, 18, RAYWHITE);
                 } else {
                     DrawText("Empty", static_cast<int>(slotX) + 10, static_cast<int>(slotY) + 45, 18, GRAY);
@@ -2722,6 +3027,20 @@ int main() {
                     }
                 }
             }
+
+            // Scythe slot
+            float scytheX = static_cast<float>(invX) + 20.0f + 3 * 160.0f;
+            float scytheY = static_cast<float>(invY) + 80.0f;
+            Rectangle scytheRect = {scytheX, scytheY, 145.0f, 170.0f};
+
+            bool scytheHover = CheckCollisionPointRec(mp, scytheRect);
+            Color scytheColor = ownsScythe ? GREEN : GRAY;
+            DrawRectangleRounded(scytheRect, 0.12f, 8, Fade({20, 30, 50, 255}, 0.9f));
+            DrawRectangleRoundedLines(scytheRect, 0.12f, 8, scytheColor);
+
+            DrawText("[F]", static_cast<int>(scytheX) + 10, static_cast<int>(scytheY) + 10, 22, YELLOW);
+            DrawText(ownsScythe ? "Potato Scythe" : "Locked", static_cast<int>(scytheX) + 10, static_cast<int>(scytheY) + 45, 18, ownsScythe ? RAYWHITE : GRAY);
+            DrawText(ownsScythe ? "READY" : "(75 nuggets)", static_cast<int>(scytheX) + 10, static_cast<int>(scytheY) + 140, 16, ownsScythe ? LIME : GRAY);
         }
 
         if (!dead && gameMode != GameMode::SinglePlayer) {
@@ -2746,8 +3065,17 @@ int main() {
             const int deathTextWidth = MeasureText(deathText, deathFontSize);
             DrawText(deathText, (screenWidth - deathTextWidth) / 2, screenHeight / 2 - 80, deathFontSize, RED);
             DrawText(TextFormat("Final Score: %i", score), screenWidth / 2 - 130, screenHeight / 2 + 4, 30, RAYWHITE);
-            DrawText("Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
-            DrawText("Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
+
+            if (enteringInitials) {
+                DrawText("Enter Your Initials (3 letters):", screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
+                std::string displayInitials = pendingInitials;
+                while (displayInitials.size() < 3) displayInitials.push_back('_');
+                DrawText(displayInitials.c_str(), screenWidth / 2 - 60, screenHeight / 2 + 82, 36, SKYBLUE);
+                DrawText("Press ENTER to submit", screenWidth / 2 - 130, screenHeight / 2 + 130, 20, ORANGE);
+            } else {
+                DrawText("Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
+                DrawText("Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
+            }
         }
 
         if (paused && !dead) {
