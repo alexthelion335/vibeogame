@@ -26,6 +26,12 @@ cmake --build build-windows --config Release
 echo "Building for Linux..."
 cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
 cmake --build build-linux --config Release
+echo "Building for Web/HTML5..."
+if command -v emcc &> /dev/null; then
+    ./build-web.sh
+else
+    echo "WARNING: Emscripten not found, skipping web build"
+fi
 echo "Building for Android..."
 ./android/build-android.sh
 echo "The following commands might ask if you want to overwrite existing files. Please confirm to overwrite if prompted."

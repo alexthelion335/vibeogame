@@ -9,7 +9,9 @@ include(FetchContent)
 
 # Build metadata shown for each compiled binary
 set(BUILD_PLATFORM "unknown")
-if(ANDROID)
+if(EMSCRIPTEN)
+    set(BUILD_PLATFORM "web")
+elseif(ANDROID)
     set(BUILD_PLATFORM "android")
 elseif(WIN32)
     set(BUILD_PLATFORM "windows")
@@ -36,7 +38,10 @@ set(TARGET_OUTPUT_BASENAME "chicken_potato_fps_${BUILD_PLATFORM}_${BUILD_ARCH}")
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
 
-if(ANDROID)
+if(EMSCRIPTEN)
+    set(PLATFORM "Web" CACHE STRING "" FORCE)
+    set(CMAKE_EXECUTABLE_SUFFIX ".html")
+elseif(ANDROID)
     set(PLATFORM "Android" CACHE STRING "" FORCE)
     # raylib's Android CMake uses ANDROID_NDK to locate native_app_glue
     if(NOT DEFINED ANDROID_NDK AND DEFINED CMAKE_ANDROID_NDK)
@@ -87,11 +92,18 @@ else()
     add_executable(chicken_potato_fps src/main.cpp)
     target_link_libraries(chicken_potato_fps PRIVATE raylib)
     
-    if(WIN32)
+    if(EMSCRIPTEN)
+        # Emscripten-specific settings for web builds
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -s USE_GLFW=3")
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s USE_GLFW=3")
+        set_target_properties(chicken_potato_fps PROPERTIES 
+            LINK_FLAGS "-s USE_GLFW=3 -s ASSERTIONS=1 -s WASM=1 -s ASYNCIFY -s ALLOW_MEMORY_GROWTH=1 --preload-file ${CMAKE_SOURCE_DIR}/highscores.txt@highscores.txt"
+        )
+        # Define PLATFORM_WEB for conditional compilation
+        target_compile_definitions(chicken_potato_fps PRIVATE PLATFORM_WEB)
+    elseif(WIN32)
         target_link_libraries(chicken_potato_fps PRIVATE ws2_32)
-    endif()
-    
-    if(UNIX AND NOT APPLE)
+    elseif(UNIX AND NOT APPLE)
         target_link_libraries(chicken_potato_fps PRIVATE m dl pthread rt X11)
     endif()
 endif()

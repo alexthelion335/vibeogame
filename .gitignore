@@ -2,5 +2,9 @@ build/
 build-linux/
 build-windows/
 build-android/
+build-web/
 apk-build/
 highscores.txt
+
+# Emscripten SDK (developers install locally)
+emsdk/
