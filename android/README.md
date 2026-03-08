@@ -5,6 +5,7 @@
 1. **Android NDK** (r21 or later): Download from https://developer.android.com/ndk/downloads
 2. **Android SDK** (with platform-tools): Download from https://developer.android.com/studio
 3. **CMake** (3.16 or later)
+4. **JDK 8+** (`javac`) and Android build-tools (`d8`) for Java bridge packaging
 
 ## Building
 
@@ -60,12 +61,30 @@ mkdir -p apk-build/lib/arm64-v8a
 cp build-android/libchicken_potato_fps.so apk-build/lib/arm64-v8a/
 cp android/AndroidManifest.xml apk-build/
 
+# Compile Java activity bridge and generate classes.dex
+mkdir -p apk-build/obj
+ANDROID_JAR=$ANDROID_SDK/platforms/android-33/android.jar
+BUILD_TOOLS_DIR=$(ls -d "$ANDROID_SDK"/build-tools/* | sort -V | tail -n 1)
+
+javac -source 1.8 -target 1.8 \
+   -classpath "$ANDROID_JAR" \
+   -d apk-build/obj \
+   android/src/com/vibeogame/chickenpotato/GameActivity.java
+
+"$BUILD_TOOLS_DIR/d8" \
+   --lib "$ANDROID_JAR" \
+   --output apk-build \
+   apk-build/obj/com/vibeogame/chickenpotato/GameActivity.class
+
 # Only needed if built with -DCMAKE_ANDROID_STL_TYPE=c++_shared
 # cp /path/to/android-ndk/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so apk-build/lib/arm64-v8a/
 
 # Create unsigned APK (manifest/resources only)
 cd apk-build
 aapt package -f -M AndroidManifest.xml -I $ANDROID_SDK/platforms/android-33/android.jar -F temp.apk
+
+# Add Java bytecode (required: manifest uses android:hasCode="true")
+aapt add temp.apk classes.dex
 
 # Add native libraries under lib/<abi>/ so NativeActivity can load them
 aapt add temp.apk lib/arm64-v8a/libchicken_potato_fps.so
@@ -107,3 +126,4 @@ adb install -r chicken_potato_fps.apk
 - Touch controls are automatically enabled on Android
 - Network permissions are included for multiplayer support
 - The app requires OpenGL ES 2.0 or higher
+- Android packaging includes `GameActivity.java` for immersive mode + keyboard support; include `classes.dex` when building APKs manually

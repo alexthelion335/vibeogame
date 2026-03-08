@@ -12,6 +12,16 @@
 #include <string>
 #include <vector>
 
+#ifdef PLATFORM_ANDROID
+    #include <jni.h>
+    #include <android/window.h>
+    #include <android_native_app_glue.h>
+
+extern "C" {
+    struct android_app* GetAndroidApp(void);
+}
+#endif
+
 // Platform-specific networking
 #ifdef _WIN32
     #define _WINSOCK_DEPRECATED_NO_WARNINGS
@@ -150,8 +160,18 @@ struct TouchControls {
     TouchButton pauseButton{};
     TouchButton inventoryButton{};
     TouchButton weaponButton{};
+    TouchButton scytheButton{};
+    TouchButton restartButton{};
+    TouchButton menuButton{};
     int cameraTouchId = -1;
     Vector2 lastCameraTouch = {0.0f, 0.0f};
+    float joystickCameraDeadZoneRadius = 0.0f;
+    int fireTouchId = -1;
+    Vector2 fireTouchStart = {0.0f, 0.0f};
+    float fireTouchDuration = 0.0f;
+    float fireTouchTravel = 0.0f;
+    bool fireTapRequested = false;
+    bool fireHoldActive = false;
     float uiScale = 1.0f;
 };
 
@@ -354,6 +374,101 @@ static void SaveHighscores(const std::array<HighscoreEntry, MAX_HIGHSCORES>& sco
     }
 }
 
+#ifdef PLATFORM_ANDROID
+static void CallAndroidActivityVoidMethod(const char* methodName) {
+    android_app* app = GetAndroidApp();
+    if (app == nullptr || app->activity == nullptr || app->activity->vm == nullptr || app->activity->clazz == nullptr) {
+        return;
+    }
+
+    JavaVM* vm = app->activity->vm;
+    JNIEnv* env = nullptr;
+    bool didAttach = false;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || env == nullptr) {
+            return;
+        }
+        didAttach = true;
+    }
+
+    jclass activityClass = env->GetObjectClass(app->activity->clazz);
+    if (activityClass != nullptr) {
+        jmethodID method = env->GetMethodID(activityClass, methodName, "()V");
+        if (method != nullptr) {
+            env->CallVoidMethod(app->activity->clazz, method);
+        }
+        env->DeleteLocalRef(activityClass);
+    }
+
+    if (didAttach) vm->DetachCurrentThread();
+}
+
+static std::string GetAndroidKeyboardInput() {
+    android_app* app = GetAndroidApp();
+    if (app == nullptr || app->activity == nullptr || app->activity->vm == nullptr || app->activity->clazz == nullptr) {
+        return "";
+    }
+
+    JavaVM* vm = app->activity->vm;
+    JNIEnv* env = nullptr;
+    bool didAttach = false;
+    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || env == nullptr) {
+            return "";
+        }
+        didAttach = true;
+    }
+
+    std::string result;
+    jclass activityClass = env->GetObjectClass(app->activity->clazz);
+    if (activityClass != nullptr) {
+        jmethodID method = env->GetMethodID(activityClass, "getKeyboardInput", "()Ljava/lang/String;");
+        if (method != nullptr) {
+            jstring jstr = (jstring)env->CallObjectMethod(app->activity->clazz, method);
+            if (jstr != nullptr) {
+                const char* str = env->GetStringUTFChars(jstr, nullptr);
+                if (str != nullptr) {
+                    result = str;
+                    env->ReleaseStringUTFChars(jstr, str);
+                }
+                env->DeleteLocalRef(jstr);
+            }
+        }
+        env->DeleteLocalRef(activityClass);
+    }
+
+    if (didAttach) vm->DetachCurrentThread();
+    return result;
+}
+
+static void SetAndroidSoftKeyboardVisible(bool visible) {
+    android_app* app = GetAndroidApp();
+    if (app == nullptr || app->activity == nullptr) {
+        return;
+    }
+
+    // Prefer Java activity bridge (runs UI ops on UI thread), fallback to NDK API.
+    if (visible) {
+        CallAndroidActivityVoidMethod("showGameKeyboard");
+        ANativeActivity_showSoftInput(app->activity, ANATIVEACTIVITY_SHOW_SOFT_INPUT_FORCED);
+    } else {
+        CallAndroidActivityVoidMethod("hideGameKeyboard");
+        ANativeActivity_hideSoftInput(app->activity, ANATIVEACTIVITY_HIDE_SOFT_INPUT_IMPLICIT_ONLY);
+    }
+}
+
+static void SetAndroidImmersiveMode() {
+    android_app* app = GetAndroidApp();
+    if (app == nullptr || app->activity == nullptr) {
+        return;
+    }
+
+    CallAndroidActivityVoidMethod("enableImmersiveMode");
+    // Fallback fullscreen flag.
+    ANativeActivity_setWindowFlags(app->activity, AWINDOW_FLAG_FULLSCREEN, AWINDOW_FLAG_FULLSCREEN);
+}
+#endif
+
 int main() {
 #ifdef _WIN32
     // Initialize Winsock
@@ -373,6 +488,7 @@ int main() {
     InitWindow(0, 0, "Chicken Potato FPS");
     screenWidth = GetScreenWidth();
     screenHeight = GetScreenHeight();
+    SetAndroidImmersiveMode();
     
     // Calculate DPI scale factor for Android
     float baseDPI = 160.0f;  // Standard Android DPI
@@ -535,6 +651,9 @@ int main() {
     bool enteringInitials = false;
     std::string pendingInitials = "AAA";
     bool viewingHighscores = false;
+#ifdef PLATFORM_ANDROID
+    bool highscoreKeyboardVisible = false;
+#endif
 
     bool shopOpen = false;
     float shopTimer = 0.0f;
@@ -684,6 +803,12 @@ int main() {
         SaveHighscores(highscores, highscoreFilePath);
         highscoreSubmittedThisRun = true;
         enteringInitials = false;
+#ifdef PLATFORM_ANDROID
+        if (highscoreKeyboardVisible) {
+            SetAndroidSoftKeyboardVisible(false);
+            highscoreKeyboardVisible = false;
+        }
+#endif
     };
 
     auto applyResolutionIndex = [&](int newIndex) {
@@ -1059,7 +1184,9 @@ int main() {
     // Initialize touch controls layout
     auto initTouchControls = [&]() {
 #ifdef PLATFORM_ANDROID
-        float scale = touchControls.uiScale;
+        const float mobileUiMultiplier = 2.0f;
+        const float buttonScaleReduction = 0.75f;
+        float scale = touchControls.uiScale * mobileUiMultiplier * buttonScaleReduction;
         float margin = 30.0f * scale;
         float btnSize = 70.0f * scale;
         
@@ -1068,26 +1195,31 @@ int main() {
         touchControls.moveJoystick.radius = 80.0f * scale;
         touchControls.moveJoystick.knobRadius = 30.0f * scale;
         
-        // Shoot button (bottom-right)
-        touchControls.shootButton.rect = {
-            screenWidth - btnSize - margin,
-            screenHeight - btnSize - margin,
-            btnSize, btnSize
-        };
-        touchControls.shootButton.label = "FIRE";
-        touchControls.shootButton.color = RED;
-        
-        // Jump button (above shoot button)
+        // Jump button (bottom-right)
         touchControls.jumpButton.rect = {
             screenWidth - btnSize - margin,
-            screenHeight - btnSize * 2.2f - margin,
+            screenHeight - btnSize - margin,
             btnSize, btnSize
         };
         touchControls.jumpButton.label = "JUMP";
         touchControls.jumpButton.color = GREEN;
         
-        // Pause button (top-left)
-        touchControls.pauseButton.rect = {margin, margin, btnSize * 0.8f, btnSize * 0.8f};
+        // Fire button (above jump button)
+        touchControls.shootButton.rect = {
+            screenWidth - btnSize - margin,
+            screenHeight - btnSize * 2.2f - margin,
+            btnSize, btnSize
+        };
+        touchControls.shootButton.label = "FIRE";
+        touchControls.shootButton.color = RED;
+        
+        // Pause button (top-center)
+        touchControls.pauseButton.rect = {
+            screenWidth * 0.5f - (btnSize * 0.8f) * 0.5f,
+            margin,
+            btnSize * 0.8f,
+            btnSize * 0.8f
+        };
         touchControls.pauseButton.label = "||";
         touchControls.pauseButton.color = YELLOW;
         
@@ -1108,103 +1240,238 @@ int main() {
         };
         touchControls.weaponButton.label = "WPN";
         touchControls.weaponButton.color = PURPLE;
+
+        // Scythe button (below weapon switch)
+        touchControls.scytheButton.rect = {
+            screenWidth - btnSize - margin,
+            margin + btnSize * 2.4f,
+            btnSize, btnSize
+        };
+        touchControls.scytheButton.label = "SCY";
+        touchControls.scytheButton.color = {200, 100, 255, 255};
+
+        // Death screen buttons
+        touchControls.restartButton.rect = {
+            screenWidth / 2 - btnSize * 1.1f,
+            static_cast<float>(screenHeight / 2 + 180),
+            btnSize * 1.2f, btnSize
+        };
+        touchControls.restartButton.label = "RESTART";
+        touchControls.restartButton.color = YELLOW;
+
+        touchControls.menuButton.rect = {
+            screenWidth / 2 + btnSize * 0.1f,
+            static_cast<float>(screenHeight / 2 + 180),
+            btnSize * 1.2f, btnSize
+        };
+        touchControls.menuButton.label = "MENU";
+        touchControls.menuButton.color = ORANGE;
+
+        touchControls.moveJoystick.active = false;
+        touchControls.moveJoystick.touchId = -1;
+        touchControls.moveJoystick.knobPos = touchControls.moveJoystick.center;
+        touchControls.moveJoystick.direction = {0.0f, 0.0f};
+
+        touchControls.cameraTouchId = -1;
+        touchControls.lastCameraTouch = {0.0f, 0.0f};
+        touchControls.joystickCameraDeadZoneRadius = touchControls.moveJoystick.radius * 2.2f;
+
+        touchControls.fireTouchId = -1;
+        touchControls.fireTouchStart = {0.0f, 0.0f};
+        touchControls.fireTouchDuration = 0.0f;
+        touchControls.fireTouchTravel = 0.0f;
+        touchControls.fireTapRequested = false;
+        touchControls.fireHoldActive = false;
 #endif
     };
 
     auto updateTouchControls = [&]() {
 #ifdef PLATFORM_ANDROID
         int touchCount = GetTouchPointCount();
-        
-        // Reset button states
-        bool shootWasPressed = touchControls.shootButton.pressed;
-        bool jumpWasPressed = touchControls.jumpButton.pressed;
-        bool pauseWasPressed = touchControls.pauseButton.pressed;
-        bool invWasPressed = touchControls.inventoryButton.pressed;
-        bool weaponWasPressed = touchControls.weaponButton.pressed;
-        
+        const float frameDt = GetFrameTime();
+
+        constexpr int maxTrackedTouchIds = 16;
+        bool activeTouchIds[maxTrackedTouchIds] = {false};
+
+        touchControls.fireTapRequested = false;
+
+        auto getNormalizedTouchId = [&](int touchIndex) {
+            int touchId = GetTouchPointId(touchIndex);
+            if (touchId < 0 || touchId >= maxTrackedTouchIds) {
+                touchId = touchIndex;
+            }
+            return touchId;
+        };
+
+        auto findTouchPositionById = [&](int touchId, Vector2 fallbackPos) {
+            for (int j = 0; j < touchCount; ++j) {
+                if (getNormalizedTouchId(j) == touchId) {
+                    return GetTouchPosition(j);
+                }
+            }
+            return fallbackPos;
+        };
+
         touchControls.shootButton.pressed = false;
         touchControls.jumpButton.pressed = false;
         touchControls.pauseButton.pressed = false;
         touchControls.inventoryButton.pressed = false;
         touchControls.weaponButton.pressed = false;
-        
-        // Track which touch IDs are currently active
-        bool activeTouchIds[10] = {false};
-        for (int i = 0; i < touchCount && i < 10; ++i) {
+        touchControls.scytheButton.pressed = false;
+        touchControls.restartButton.pressed = false;
+        touchControls.menuButton.pressed = false;
+
+        for (int i = 0; i < touchCount; ++i) {
             Vector2 touchPos = GetTouchPosition(i);
-            activeTouchIds[i] = true;
-            
+            int touchId = getNormalizedTouchId(i);
+            if (touchId >= 0 && touchId < maxTrackedTouchIds) {
+                activeTouchIds[touchId] = true;
+            }
+
             // Check joystick
-            if (touchControls.moveJoystick.touchId == i || 
+            if (touchControls.moveJoystick.touchId == touchId ||
                 (touchControls.moveJoystick.touchId == -1 && 
                  Vector2Distance(touchPos, touchControls.moveJoystick.center) < touchControls.moveJoystick.radius * 1.5f)) {
-                
+
                 touchControls.moveJoystick.active = true;
-                touchControls.moveJoystick.touchId = i;
-                
+                touchControls.moveJoystick.touchId = touchId;
+
                 Vector2 delta = Vector2Subtract(touchPos, touchControls.moveJoystick.center);
                 float dist = Vector2Length(delta);
                 if (dist > touchControls.moveJoystick.radius) {
                     delta = Vector2Scale(Vector2Normalize(delta), touchControls.moveJoystick.radius);
                 }
                 touchControls.moveJoystick.knobPos = Vector2Add(touchControls.moveJoystick.center, delta);
-                touchControls.moveJoystick.direction = Vector2Normalize(delta);
-                if (dist < 5.0f) {
+                float deadZone = touchControls.moveJoystick.radius * 0.14f;
+                if (dist > deadZone) {
+                    touchControls.moveJoystick.direction = Vector2Scale(delta, 1.0f / touchControls.moveJoystick.radius);
+                } else {
                     touchControls.moveJoystick.direction = {0.0f, 0.0f};
+                }
+
+                // If this finger is also camera/fire touch, release it to avoid dual-control conflicts
+                if (touchControls.cameraTouchId == touchId) {
+                    touchControls.cameraTouchId = -1;
+                    touchControls.fireTouchId = -1;
+                    touchControls.fireTouchDuration = 0.0f;
+                    touchControls.fireTouchTravel = 0.0f;
+                    touchControls.fireHoldActive = false;
                 }
                 continue;
             }
-            
+
             // Check buttons
             if (CheckCollisionPointRec(touchPos, touchControls.shootButton.rect)) {
                 touchControls.shootButton.pressed = true;
-                touchControls.shootButton.touchId = i;
+                touchControls.shootButton.touchId = touchId;
                 continue;
             }
             if (CheckCollisionPointRec(touchPos, touchControls.jumpButton.rect)) {
                 touchControls.jumpButton.pressed = true;
-                touchControls.jumpButton.touchId = i;
+                touchControls.jumpButton.touchId = touchId;
                 continue;
             }
             if (CheckCollisionPointRec(touchPos, touchControls.pauseButton.rect)) {
                 touchControls.pauseButton.pressed = true;
-                touchControls.pauseButton.touchId = i;
+                touchControls.pauseButton.touchId = touchId;
                 continue;
             }
             if (CheckCollisionPointRec(touchPos, touchControls.inventoryButton.rect)) {
                 touchControls.inventoryButton.pressed = true;
-                touchControls.inventoryButton.touchId = i;
+                touchControls.inventoryButton.touchId = touchId;
                 continue;
             }
             if (CheckCollisionPointRec(touchPos, touchControls.weaponButton.rect)) {
                 touchControls.weaponButton.pressed = true;
-                touchControls.weaponButton.touchId = i;
+                touchControls.weaponButton.touchId = touchId;
                 continue;
             }
-            
+            if (CheckCollisionPointRec(touchPos, touchControls.scytheButton.rect)) {
+                touchControls.scytheButton.pressed = true;
+                touchControls.scytheButton.touchId = touchId;
+                continue;
+            }
+            if (CheckCollisionPointRec(touchPos, touchControls.restartButton.rect)) {
+                touchControls.restartButton.pressed = true;
+                touchControls.restartButton.touchId = touchId;
+                continue;
+            }
+            if (CheckCollisionPointRec(touchPos, touchControls.menuButton.rect)) {
+                touchControls.menuButton.pressed = true;
+                touchControls.menuButton.touchId = touchId;
+                continue;
+            }
+
             // Camera control (any touch in right half of screen not on buttons)
-            if (touchPos.x > screenWidth * 0.4f) {
-                if (touchControls.cameraTouchId == -1 || touchControls.cameraTouchId == i) {
+            bool outsideJoystickDeadZone =
+                Vector2Distance(touchPos, touchControls.moveJoystick.center) > touchControls.joystickCameraDeadZoneRadius;
+            if (outsideJoystickDeadZone && touchPos.x > screenWidth * 0.40f) {
+                if (touchControls.cameraTouchId == -1 || touchControls.cameraTouchId == touchId) {
                     if (touchControls.cameraTouchId == -1) {
                         touchControls.lastCameraTouch = touchPos;
+
+                        // This touch can also act as tap/hold fire while aiming on the right side.
+                        touchControls.fireTouchId = touchId;
+                        touchControls.fireTouchStart = touchPos;
+                        touchControls.fireTouchDuration = 0.0f;
+                        touchControls.fireTouchTravel = 0.0f;
+                        touchControls.fireHoldActive = false;
                     }
-                    touchControls.cameraTouchId = i;
+                    touchControls.cameraTouchId = touchId;
                 }
             }
         }
-        
+
+        // Update tap/hold fire state from the active camera touch.
+        if (touchControls.fireTouchId >= 0) {
+            bool fireTouchStillActive = (touchControls.fireTouchId < maxTrackedTouchIds) &&
+                                        activeTouchIds[touchControls.fireTouchId];
+
+            const float tapMaxDuration = 0.26f;
+            const float tapMaxTravel = 28.0f * touchControls.uiScale;
+            const float holdStartDuration = 0.16f;
+            const float holdMaxTravel = 36.0f * touchControls.uiScale;
+
+            if (fireTouchStillActive) {
+                Vector2 firePos = findTouchPositionById(touchControls.fireTouchId, touchControls.fireTouchStart);
+                touchControls.fireTouchDuration += frameDt;
+                touchControls.fireTouchTravel = Vector2Distance(firePos, touchControls.fireTouchStart);
+                if (touchControls.fireTouchDuration >= holdStartDuration &&
+                    touchControls.fireTouchTravel <= holdMaxTravel) {
+                    touchControls.fireHoldActive = true;
+                } else if (touchControls.fireTouchTravel > holdMaxTravel) {
+                    touchControls.fireHoldActive = false;
+                }
+            } else {
+                if (!touchControls.fireHoldActive &&
+                    touchControls.fireTouchDuration <= tapMaxDuration &&
+                    touchControls.fireTouchTravel <= tapMaxTravel) {
+                    touchControls.fireTapRequested = true;
+                }
+
+                touchControls.fireTouchId = -1;
+                touchControls.fireTouchDuration = 0.0f;
+                touchControls.fireTouchTravel = 0.0f;
+                touchControls.fireHoldActive = false;
+            }
+        } else {
+            touchControls.fireHoldActive = false;
+        }
+
         // Release joystick if touch ended
         if (touchControls.moveJoystick.touchId >= 0 && 
-            (touchControls.moveJoystick.touchId >= touchCount || !activeTouchIds[touchControls.moveJoystick.touchId])) {
+            (touchControls.moveJoystick.touchId >= maxTrackedTouchIds ||
+             !activeTouchIds[touchControls.moveJoystick.touchId])) {
             touchControls.moveJoystick.active = false;
             touchControls.moveJoystick.touchId = -1;
             touchControls.moveJoystick.knobPos = touchControls.moveJoystick.center;
             touchControls.moveJoystick.direction = {0.0f, 0.0f};
         }
-        
+
         // Release camera touch
         if (touchControls.cameraTouchId >= 0 && 
-            (touchControls.cameraTouchId >= touchCount || !activeTouchIds[touchControls.cameraTouchId])) {
+            (touchControls.cameraTouchId >= maxTrackedTouchIds ||
+             !activeTouchIds[touchControls.cameraTouchId])) {
             touchControls.cameraTouchId = -1;
         }
 #endif
@@ -1240,11 +1507,13 @@ int main() {
                     fontSize, WHITE);
         };
         
+        // Draw gameplay buttons
         drawButton(touchControls.shootButton);
         drawButton(touchControls.jumpButton);
         drawButton(touchControls.pauseButton);
         drawButton(touchControls.inventoryButton);
         drawButton(touchControls.weaponButton);
+        drawButton(touchControls.scytheButton);
 #endif
     };
 
@@ -1270,6 +1539,10 @@ int main() {
         screenWidth = GetScreenWidth();
         screenHeight = GetScreenHeight();
         const float dt = GetFrameTime();
+
+    #ifdef PLATFORM_ANDROID
+        SetAndroidImmersiveMode();
+    #endif
         
         // Reinitialize touch controls if screen size changed
 #ifdef PLATFORM_ANDROID
@@ -1338,18 +1611,37 @@ int main() {
 
             // View highscores mode
             if (viewingHighscores) {
-                if (IsKeyPressed(KEY_ESCAPE)) {
+                int hsW = 560;
+                int hsH = 520;
+                int hsX = screenWidth / 2 - hsW / 2;
+                int hsY = screenHeight / 2 - hsH / 2;
+                Rectangle hsBackRect = {static_cast<float>(hsX + hsW / 2 - 110), static_cast<float>(hsY + hsH - 62), 220.0f, 42.0f};
+
+                Vector2 hsMousePos = GetMousePosition();
+                bool hsBackHover = CheckCollisionPointRec(hsMousePos, hsBackRect);
+                bool hsBackPressed = false;
+
+                if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT) && hsBackHover) {
+                    hsBackPressed = true;
+                }
+
+#ifdef PLATFORM_ANDROID
+                int hsTouchCount = GetTouchPointCount();
+                for (int i = 0; i < hsTouchCount; ++i) {
+                    if (CheckCollisionPointRec(GetTouchPosition(i), hsBackRect)) {
+                        hsBackPressed = true;
+                        break;
+                    }
+                }
+#endif
+
+                if (IsKeyPressed(KEY_ESCAPE) || hsBackPressed) {
                     viewingHighscores = false;
                     continue;
                 }
 
                 BeginDrawing();
                 DrawRectangleGradientV(0, 0, screenWidth, screenHeight, {94, 170, 240, 255}, {48, 92, 148, 255});
-
-                int hsW = 560;
-                int hsH = 520;
-                int hsX = screenWidth / 2 - hsW / 2;
-                int hsY = screenHeight / 2 - hsH / 2;
 
                 DrawRectangleRounded({static_cast<float>(hsX), static_cast<float>(hsY), static_cast<float>(hsW), static_cast<float>(hsH)}, 0.04f, 12, Fade({8, 14, 22, 255}, 0.86f));
                 DrawRectangleRoundedLines({static_cast<float>(hsX), static_cast<float>(hsY), static_cast<float>(hsW), static_cast<float>(hsH)}, 0.04f, 12, Fade(SKYBLUE, 0.8f));
@@ -1365,7 +1657,10 @@ int main() {
                     y += lineHeight;
                 }
 
-                DrawCenteredTextLine("Press ESCAPE to return", screenWidth / 2, hsY + hsH - 40, 20, Fade(RAYWHITE, 0.8f));
+                DrawRectangleRounded(hsBackRect, 0.25f, 8, hsBackHover ? Fade(ORANGE, 0.45f) : Fade(ORANGE, 0.28f));
+                DrawRectangleRoundedLines(hsBackRect, 0.25f, 8, Fade(RAYWHITE, 0.85f));
+                DrawCenteredTextLine("Back", static_cast<int>(hsBackRect.x + hsBackRect.width / 2), static_cast<int>(hsBackRect.y + 8), 28, RAYWHITE);
+                DrawCenteredTextLine("ESC also works", screenWidth / 2, hsY + hsH - 12, 18, Fade(RAYWHITE, 0.7f));
                 EndDrawing();
                 continue;
             }
@@ -1664,8 +1959,51 @@ int main() {
         }
 
         if (dead) {
+#ifdef PLATFORM_ANDROID
+            // Keep touch state updated while dead so restart/menu buttons are interactive.
+            updateTouchControls();
+#endif
             if (!highscoreSubmittedThisRun && scoreQualifiesForHighscore(score)) {
-                enteringInitials = true;
+                if (!enteringInitials) {
+                    enteringInitials = true;
+                    pendingInitials.clear();
+                }
+
+#ifdef PLATFORM_ANDROID
+                // Tap on initials area to open keyboard
+                {
+                    int touchCount = GetTouchPointCount();
+                    Rectangle initialsRect = {
+                        static_cast<float>(screenWidth / 2 - 160),
+                        static_cast<float>(screenHeight / 2 + 40),
+                        320.0f, 100.0f
+                    };
+                    for (int i = 0; i < touchCount; ++i) {
+                        Vector2 tp = GetTouchPosition(i);
+                        if (CheckCollisionPointRec(tp, initialsRect)) {
+                            if (!highscoreKeyboardVisible) {
+                                SetAndroidSoftKeyboardVisible(true);
+                                highscoreKeyboardVisible = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // Poll keyboard input from Java EditText bridge
+                if (highscoreKeyboardVisible) {
+                    std::string androidInput = GetAndroidKeyboardInput();
+                    for (char c : androidInput) {
+                        if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
+                        if (c >= 'A' && c <= 'Z') {
+                            pendingInitials.push_back(c);
+                            if (pendingInitials.size() > 3) {
+                                pendingInitials.erase(pendingInitials.begin());
+                            }
+                        }
+                    }
+                }
+#endif
 
                 int key = GetCharPressed();
                 while (key > 0) {
@@ -1679,24 +2017,82 @@ int main() {
                     key = GetCharPressed();
                 }
 
+                int keyPressed = GetKeyPressed();
+                while (keyPressed > 0) {
+                    if (keyPressed >= KEY_A && keyPressed <= KEY_Z) {
+                        char letter = static_cast<char>('A' + (keyPressed - KEY_A));
+                        pendingInitials.push_back(letter);
+                        if (pendingInitials.size() > 3) {
+                            pendingInitials.erase(pendingInitials.begin());
+                        }
+                    } else if (keyPressed == KEY_BACKSPACE && !pendingInitials.empty()) {
+                        pendingInitials.pop_back();
+                    } else if (keyPressed == KEY_ENTER || keyPressed == KEY_KP_ENTER) {
+                        submitHighscore();
+                    }
+                    keyPressed = GetKeyPressed();
+                }
+
                 if (IsKeyPressed(KEY_BACKSPACE) && !pendingInitials.empty()) {
                     pendingInitials.pop_back();
                 }
-                while (pendingInitials.size() < 3) {
-                    pendingInitials.push_back('A');
+                if (pendingInitials.size() > 3) {
+                    pendingInitials = pendingInitials.substr(pendingInitials.size() - 3);
                 }
 
                 if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
                     submitHighscore();
                 }
+
+#ifdef PLATFORM_ANDROID
+                // Touch-based SUBMIT button
+                {
+                    Rectangle submitRect = {
+                        static_cast<float>(screenWidth / 2 - 80),
+                        static_cast<float>(screenHeight / 2 + 125),
+                        160.0f, 45.0f
+                    };
+                    int touchCount = GetTouchPointCount();
+                    static bool lastSubmitTouched = false;
+                    bool submitTouched = false;
+                    for (int i = 0; i < touchCount; ++i) {
+                        if (CheckCollisionPointRec(GetTouchPosition(i), submitRect)) {
+                            submitTouched = true;
+                            break;
+                        }
+                    }
+                    if (submitTouched && !lastSubmitTouched) {
+                        submitHighscore();
+                    }
+                    lastSubmitTouched = submitTouched;
+                }
+#endif
             } else {
+#ifdef PLATFORM_ANDROID
+                if (highscoreKeyboardVisible) {
+                    SetAndroidSoftKeyboardVisible(false);
+                    highscoreKeyboardVisible = false;
+                }
+#endif
                 enteringInitials = false;
             }
 
             if (IsKeyPressed(KEY_R)) {
+#ifdef PLATFORM_ANDROID
+                if (highscoreKeyboardVisible) {
+                    SetAndroidSoftKeyboardVisible(false);
+                    highscoreKeyboardVisible = false;
+                }
+#endif
                 resetGame();
             }
             if (IsKeyPressed(KEY_ESCAPE)) {
+#ifdef PLATFORM_ANDROID
+                if (highscoreKeyboardVisible) {
+                    SetAndroidSoftKeyboardVisible(false);
+                    highscoreKeyboardVisible = false;
+                }
+#endif
                 closeNetwork();
                 resetGame();
                 screenState = ScreenState::Intro;
@@ -1706,6 +2102,35 @@ int main() {
                 EndDrawing();
                 continue;
             }
+#ifdef PLATFORM_ANDROID
+            // Handle restart and menu buttons on Android
+            static bool lastRestartPressed = false;
+            static bool lastMenuPressed = false;
+            if (touchControls.restartButton.pressed && !lastRestartPressed) {
+                if (highscoreKeyboardVisible) {
+                    SetAndroidSoftKeyboardVisible(false);
+                    highscoreKeyboardVisible = false;
+                }
+                resetGame();
+            }
+            lastRestartPressed = touchControls.restartButton.pressed;
+            
+            if (touchControls.menuButton.pressed && !lastMenuPressed) {
+                if (highscoreKeyboardVisible) {
+                    SetAndroidSoftKeyboardVisible(false);
+                    highscoreKeyboardVisible = false;
+                }
+                closeNetwork();
+                resetGame();
+                screenState = ScreenState::Intro;
+                EnableCursor();
+                ShowCursor();
+                BeginDrawing();
+                EndDrawing();
+                continue;
+            }
+            lastMenuPressed = touchControls.menuButton.pressed;
+#endif
         } else if (!paused) {
             bool onlineClient = (gameMode == GameMode::Online && netRole == NetRole::Client);
 
@@ -1743,6 +2168,44 @@ int main() {
                 }
             }
             lastWeaponPressed = touchControls.weaponButton.pressed;
+            
+            // Handle scythe button
+            static bool lastScythePressed = false;
+            if (touchControls.scytheButton.pressed && !lastScythePressed && !shopOpen && !inventoryOpen) {
+                if (playerHealth > 0.0f && ownsScythe && scytheCooldown <= 0.0f) {
+                    scytheCooldown = 1.1f;
+                    scytheSwingVisualTimer = 0.18f;
+
+                    Vector3 meleeCenter = camera.position;
+                    meleeCenter.y = 0.7f;
+                    // Calculate forward direction from current yaw/pitch
+                    Vector3 aimDir = {
+                        std::cos(pitch) * std::sin(yaw),
+                        std::sin(pitch),
+                        std::cos(pitch) * std::cos(yaw)
+                    };
+                    aimDir.y = 0.0f;
+                    if (Vector3Length(aimDir) < 0.001f) {
+                        aimDir = {0.0f, 0.0f, 1.0f};
+                    } else {
+                        aimDir = Vector3Normalize(aimDir);
+                    }
+
+                    for (auto& c : chickens) {
+                        if (c.hp <= 0.0f) continue;
+                        Vector3 toChicken = Vector3Subtract(c.pos, meleeCenter);
+                        toChicken.y = 0.0f;
+                        float dist = Vector3Length(toChicken);
+                        if (dist > 5.1f || dist < 0.001f) continue;
+                        Vector3 toDir = Vector3Scale(toChicken, 1.0f / dist);
+                        float facing = Vector3DotProduct(toDir, aimDir);
+                        if (facing >= 0.15f) {
+                            c.hp -= 80.0f;
+                        }
+                    }
+                }
+            }
+            lastScythePressed = touchControls.scytheButton.pressed;
 #endif
 
             if (!shopOpen && !inventoryOpen) {
@@ -1852,6 +2315,16 @@ int main() {
             if (onlineClient) {
                 uint8_t moveMask = 0;
                 if (coopHealth > 0.0f) {
+#ifdef PLATFORM_ANDROID
+                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.y > 0.1f) moveMask |= (1 << 0);
+                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.y < -0.1f) moveMask |= (1 << 1);
+                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.x < -0.1f) moveMask |= (1 << 2);
+                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.x > 0.1f) moveMask |= (1 << 3);
+                    if (touchControls.jumpButton.pressed) moveMask |= (1 << 5);
+                    if (touchControls.shootButton.pressed || touchControls.fireHoldActive || touchControls.fireTapRequested) {
+                        moveMask |= (1 << 6);
+                    }
+#else
                     if (IsKeyDown(KEY_W)) moveMask |= (1 << 0);
                     if (IsKeyDown(KEY_S)) moveMask |= (1 << 1);
                     if (IsKeyDown(KEY_A)) moveMask |= (1 << 2);
@@ -1859,6 +2332,7 @@ int main() {
                     if (IsKeyDown(KEY_LEFT_SHIFT)) moveMask |= (1 << 4);
                     if (IsKeyDown(KEY_SPACE)) moveMask |= (1 << 5);
                     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) moveMask |= (1 << 6);
+#endif
                 }
 
                 sendInputToHost(moveMask);
@@ -1955,12 +2429,14 @@ int main() {
 
                 // Shooting handling
 #ifdef PLATFORM_ANDROID
-                bool shootDown = touchControls.shootButton.pressed;
+                bool shootDown = touchControls.shootButton.pressed || touchControls.fireHoldActive;
+                bool shootPressed = touchControls.fireTapRequested;
 #else
                 bool shootDown = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+                bool shootPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
 #endif
                 
-                if (playerHealth > 0.0f && shootDown && shootCooldown <= 0.0f && !shopOpen && !inventoryOpen) {
+                if (playerHealth > 0.0f && (shootDown || shootPressed) && shootCooldown <= 0.0f && !shopOpen && !inventoryOpen) {
                     WeaponType currentWeapon = inventory[currentWeaponSlot].weapon;
                     bool weaponOwned = inventory[currentWeaponSlot].owned;
 
@@ -2860,7 +3336,7 @@ int main() {
         }
 
         // Draw touch controls on Android
-        if (!paused && !shopOpen && !inventoryOpen) {
+        if (!paused && !shopOpen && !inventoryOpen && !dead) {
             drawTouchControls();
         }
 
@@ -3067,15 +3543,57 @@ int main() {
             DrawText(TextFormat("Final Score: %i", score), screenWidth / 2 - 130, screenHeight / 2 + 4, 30, RAYWHITE);
 
             if (enteringInitials) {
+#ifdef PLATFORM_ANDROID
+                if (!highscoreKeyboardVisible) {
+                    DrawText("Tap initials to type:", screenWidth / 2 - 130, screenHeight / 2 + 50, 24, YELLOW);
+                } else {
+                    DrawText("Type your initials (3 letters):", screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
+                }
+#else
                 DrawText("Enter Your Initials (3 letters):", screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
+#endif
                 std::string displayInitials = pendingInitials;
                 while (displayInitials.size() < 3) displayInitials.push_back('_');
                 DrawText(displayInitials.c_str(), screenWidth / 2 - 60, screenHeight / 2 + 82, 36, SKYBLUE);
+#ifdef PLATFORM_ANDROID
+                if (highscoreKeyboardVisible) {
+                    Rectangle submitBtnRect = {
+                        static_cast<float>(screenWidth / 2 - 80),
+                        static_cast<float>(screenHeight / 2 + 125),
+                        160.0f, 45.0f
+                    };
+                    DrawRectangleRounded(submitBtnRect, 0.3f, 8, Fade(GREEN, 0.7f));
+                    DrawRectangleRoundedLines(submitBtnRect, 0.3f, 8, WHITE);
+                    int submitFontSize = 22;
+                    int submitTextW = MeasureText("SUBMIT", submitFontSize);
+                    DrawText("SUBMIT",
+                             static_cast<int>(submitBtnRect.x + submitBtnRect.width / 2 - submitTextW / 2),
+                             static_cast<int>(submitBtnRect.y + submitBtnRect.height / 2 - submitFontSize / 2),
+                             submitFontSize, WHITE);
+                }
+#else
                 DrawText("Press ENTER to submit", screenWidth / 2 - 130, screenHeight / 2 + 130, 20, ORANGE);
+#endif
             } else {
                 DrawText("Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
                 DrawText("Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
             }
+
+#ifdef PLATFORM_ANDROID
+            auto drawMobileButton = [](const TouchButton& btn) {
+                Color col = btn.pressed ? Fade(btn.color, 0.9f) : Fade(btn.color, btn.alpha);
+                DrawRectangleRounded(btn.rect, 0.2f, 8, col);
+                DrawRectangleRoundedLines(btn.rect, 0.2f, 8, Fade(WHITE, 0.9f));
+                int fontSize = static_cast<int>(btn.rect.height * 0.26f);
+                int textWidth = MeasureText(btn.label, fontSize);
+                DrawText(btn.label,
+                         static_cast<int>(btn.rect.x + btn.rect.width / 2 - textWidth / 2),
+                         static_cast<int>(btn.rect.y + btn.rect.height / 2 - fontSize / 2),
+                         fontSize, WHITE);
+            };
+            drawMobileButton(touchControls.restartButton);
+            drawMobileButton(touchControls.menuButton);
+#endif
         }
 
         if (paused && !dead) {

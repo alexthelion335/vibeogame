@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.vibeogame.chickenpotato"
     android:versionCode="2"
-    android:versionName="1.2.0">
+    android:versionName="1.2.1">
 
     <uses-sdk
         android:minSdkVersion="21"
@@ -21,11 +21,12 @@
         android:allowBackup="false"
         android:label="Chicken Potato FPS"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
-        android:hasCode="false">
+        android:hasCode="true">
 
         <activity
-            android:name="android.app.NativeActivity"
+            android:name="com.vibeogame.chickenpotato.GameActivity"
             android:label="Chicken Potato FPS"
+            android:immersive="true"
             android:screenOrientation="landscape"
             android:configChanges="orientation|keyboardHidden|screenSize"
             android:launchMode="singleTask"

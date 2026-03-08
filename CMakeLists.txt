@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ChickenPotatoFPS VERSION 1.2.0 LANGUAGES CXX)
+project(ChickenPotatoFPS VERSION 1.2.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,6 +29,17 @@ FetchContent_MakeAvailable(raylib)
 # Android builds as shared library, others as executable
 if(ANDROID)
     add_library(chicken_potato_fps SHARED src/main.cpp)
+
+    # Ensure NDK native_app_glue headers are available to game code
+    set(NATIVE_APP_GLUE_DIR "")
+    if(DEFINED ANDROID_NDK)
+        set(NATIVE_APP_GLUE_DIR "${ANDROID_NDK}/sources/android/native_app_glue")
+    elseif(DEFINED CMAKE_ANDROID_NDK)
+        set(NATIVE_APP_GLUE_DIR "${CMAKE_ANDROID_NDK}/sources/android/native_app_glue")
+    endif()
+    if(NATIVE_APP_GLUE_DIR)
+        target_include_directories(chicken_potato_fps PRIVATE "${NATIVE_APP_GLUE_DIR}")
+    endif()
     
     # Android-specific linker flags
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -u ANativeActivity_onCreate")

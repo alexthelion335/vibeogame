@@ -46,6 +46,8 @@ Note: The build script uses `c++_static` to avoid missing `libc++_shared.so` cra
 
 See full instructions in `android/README.md`
 
+> Note: Android packaging now includes a small Java activity bridge (`GameActivity`) used for immersive mode and soft-keyboard control. If you build APKs manually, you must compile Java and include `classes.dex` in the APK.
+
 ## Step 4: Install on Device
 
 ```bash
@@ -90,6 +92,11 @@ chmod +x android/build-android.sh
 - Try `adb uninstall com.vibeogame.chickenpotato` first
 - Check for signature conflicts if reinstalling
 - If you see `INSTALL_PARSE_FAILED_NO_CERTIFICATES`, sign with `apksigner` (not only `jarsigner`) so the APK has v2/v3 signatures
+
+### Java bridge methods not found / keyboard or immersive mode not working
+- Ensure `android/src/com/vibeogame/chickenpotato/GameActivity.java` is compiled
+- Ensure `classes.dex` is added to the APK (`aapt add temp.apk classes.dex`)
+- Ensure manifest uses `com.vibeogame.chickenpotato.GameActivity` and `android:hasCode="true"`
 
 ### Touch controls not showing
 - Make sure PLATFORM_ANDROID is defined (automatic in CMake)
