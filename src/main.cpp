@@ -119,6 +119,38 @@ enum class NetRole {
     Client
 };
 
+// Touch input structures for mobile
+struct VirtualJoystick {
+    Vector2 center = {0.0f, 0.0f};
+    Vector2 knobPos = {0.0f, 0.0f};
+    float radius = 80.0f;
+    float knobRadius = 30.0f;
+    bool active = false;
+    int touchId = -1;
+    Vector2 direction = {0.0f, 0.0f};
+};
+
+struct TouchButton {
+    Rectangle rect = {0.0f, 0.0f, 0.0f, 0.0f};
+    const char* label = "";
+    bool pressed = false;
+    int touchId = -1;
+    Color color = WHITE;
+    float alpha = 0.6f;
+};
+
+struct TouchControls {
+    VirtualJoystick moveJoystick{};
+    TouchButton shootButton{};
+    TouchButton jumpButton{};
+    TouchButton pauseButton{};
+    TouchButton inventoryButton{};
+    TouchButton weaponButton{};
+    int cameraTouchId = -1;
+    Vector2 lastCameraTouch = {0.0f, 0.0f};
+    float uiScale = 1.0f;
+};
+
 constexpr uint32_t NET_MAGIC = 0x43504653;  // CPFS
 constexpr uint8_t NET_HELLO = 1;
 constexpr uint8_t NET_INPUT = 2;
@@ -276,9 +308,27 @@ int main() {
     int screenWidth = initialScreenWidth;
     int screenHeight = initialScreenHeight;
 
+#ifdef PLATFORM_ANDROID
+    // On Android, start with fullscreen at native resolution
+    InitWindow(0, 0, "Chicken Potato FPS");
+    screenWidth = GetScreenWidth();
+    screenHeight = GetScreenHeight();
+    
+    // Calculate DPI scale factor for Android
+    float baseDPI = 160.0f;  // Standard Android DPI
+    float currentDPI = GetWindowScaleDPI().x * baseDPI;
+    float dpiScale = currentDPI / baseDPI;
+#else
     InitWindow(screenWidth, screenHeight, "Chicken Potato FPS");
+    float dpiScale = 1.0f;
+#endif
+
     SetTargetFPS(120);
     SetExitKey(KEY_NULL);
+
+    // Touch controls for mobile
+    TouchControls touchControls{};
+    touchControls.uiScale = dpiScale * 1.5f;
 
     Camera3D camera{};
     camera.position = {0.0f, 1.8f, 6.0f};
@@ -321,6 +371,7 @@ int main() {
     int currentResolutionIndex = 7;
     int pauseSelection = 0;
 
+#ifndef PLATFORM_ANDROID
     const int monitor = GetCurrentMonitor();
     const int monitorWidth = GetMonitorWidth(monitor);
     const int monitorHeight = GetMonitorHeight(monitor);
@@ -340,6 +391,10 @@ int main() {
 
     SetWindowSize(monitorWidth, monitorHeight);
     ToggleFullscreen();
+#else
+    // Android is already fullscreen via NativeActivity window handling.
+    fullscreen = true;
+#endif
 
     std::vector<Potato> potatoes;
     std::vector<EnemyPotato> enemyPotatoes;
@@ -522,6 +577,10 @@ int main() {
     };
 
     auto applyResolutionIndex = [&](int newIndex) {
+#ifdef PLATFORM_ANDROID
+        (void)newIndex;
+        return;
+#else
         currentResolutionIndex = (newIndex + static_cast<int>(resolutionOptions.size())) % static_cast<int>(resolutionOptions.size());
         const int targetW = static_cast<int>(resolutionOptions[currentResolutionIndex].x);
         const int targetH = static_cast<int>(resolutionOptions[currentResolutionIndex].y);
@@ -532,9 +591,13 @@ int main() {
             SetWindowSize(targetW, targetH);
             ToggleFullscreen();
         }
+#endif
     };
 
     auto toggleFullscreenWindowed = [&]() {
+#ifdef PLATFORM_ANDROID
+        return;
+#else
         if (!fullscreen) {
             windowedWidth = GetScreenWidth();
             windowedHeight = GetScreenHeight();
@@ -547,6 +610,7 @@ int main() {
             fullscreen = false;
             SetWindowSize(windowedWidth, windowedHeight);
         }
+#endif
     };
 
     auto closeNetwork = [&]() {
@@ -882,6 +946,199 @@ int main() {
     inventory[1] = {WeaponType::PotatoShotgun, false};
     inventory[2] = {WeaponType::PotatoGrenade, false};
 
+    // Initialize touch controls layout
+    auto initTouchControls = [&]() {
+#ifdef PLATFORM_ANDROID
+        float scale = touchControls.uiScale;
+        float margin = 30.0f * scale;
+        float btnSize = 70.0f * scale;
+        
+        // Movement joystick (bottom-left)
+        touchControls.moveJoystick.center = {150.0f * scale, screenHeight - 150.0f * scale};
+        touchControls.moveJoystick.radius = 80.0f * scale;
+        touchControls.moveJoystick.knobRadius = 30.0f * scale;
+        
+        // Shoot button (bottom-right)
+        touchControls.shootButton.rect = {
+            screenWidth - btnSize - margin,
+            screenHeight - btnSize - margin,
+            btnSize, btnSize
+        };
+        touchControls.shootButton.label = "FIRE";
+        touchControls.shootButton.color = RED;
+        
+        // Jump button (above shoot button)
+        touchControls.jumpButton.rect = {
+            screenWidth - btnSize - margin,
+            screenHeight - btnSize * 2.2f - margin,
+            btnSize, btnSize
+        };
+        touchControls.jumpButton.label = "JUMP";
+        touchControls.jumpButton.color = GREEN;
+        
+        // Pause button (top-left)
+        touchControls.pauseButton.rect = {margin, margin, btnSize * 0.8f, btnSize * 0.8f};
+        touchControls.pauseButton.label = "||";
+        touchControls.pauseButton.color = YELLOW;
+        
+        // Inventory button (top-right)
+        touchControls.inventoryButton.rect = {
+            screenWidth - btnSize - margin,
+            margin,
+            btnSize, btnSize
+        };
+        touchControls.inventoryButton.label = "INV";
+        touchControls.inventoryButton.color = BLUE;
+        
+        // Weapon switch button (below inventory)
+        touchControls.weaponButton.rect = {
+            screenWidth - btnSize - margin,
+            margin + btnSize * 1.2f,
+            btnSize, btnSize
+        };
+        touchControls.weaponButton.label = "WPN";
+        touchControls.weaponButton.color = PURPLE;
+#endif
+    };
+
+    auto updateTouchControls = [&]() {
+#ifdef PLATFORM_ANDROID
+        int touchCount = GetTouchPointCount();
+        
+        // Reset button states
+        bool shootWasPressed = touchControls.shootButton.pressed;
+        bool jumpWasPressed = touchControls.jumpButton.pressed;
+        bool pauseWasPressed = touchControls.pauseButton.pressed;
+        bool invWasPressed = touchControls.inventoryButton.pressed;
+        bool weaponWasPressed = touchControls.weaponButton.pressed;
+        
+        touchControls.shootButton.pressed = false;
+        touchControls.jumpButton.pressed = false;
+        touchControls.pauseButton.pressed = false;
+        touchControls.inventoryButton.pressed = false;
+        touchControls.weaponButton.pressed = false;
+        
+        // Track which touch IDs are currently active
+        bool activeTouchIds[10] = {false};
+        for (int i = 0; i < touchCount && i < 10; ++i) {
+            Vector2 touchPos = GetTouchPosition(i);
+            activeTouchIds[i] = true;
+            
+            // Check joystick
+            if (touchControls.moveJoystick.touchId == i || 
+                (touchControls.moveJoystick.touchId == -1 && 
+                 Vector2Distance(touchPos, touchControls.moveJoystick.center) < touchControls.moveJoystick.radius * 1.5f)) {
+                
+                touchControls.moveJoystick.active = true;
+                touchControls.moveJoystick.touchId = i;
+                
+                Vector2 delta = Vector2Subtract(touchPos, touchControls.moveJoystick.center);
+                float dist = Vector2Length(delta);
+                if (dist > touchControls.moveJoystick.radius) {
+                    delta = Vector2Scale(Vector2Normalize(delta), touchControls.moveJoystick.radius);
+                }
+                touchControls.moveJoystick.knobPos = Vector2Add(touchControls.moveJoystick.center, delta);
+                touchControls.moveJoystick.direction = Vector2Normalize(delta);
+                if (dist < 5.0f) {
+                    touchControls.moveJoystick.direction = {0.0f, 0.0f};
+                }
+                continue;
+            }
+            
+            // Check buttons
+            if (CheckCollisionPointRec(touchPos, touchControls.shootButton.rect)) {
+                touchControls.shootButton.pressed = true;
+                touchControls.shootButton.touchId = i;
+                continue;
+            }
+            if (CheckCollisionPointRec(touchPos, touchControls.jumpButton.rect)) {
+                touchControls.jumpButton.pressed = true;
+                touchControls.jumpButton.touchId = i;
+                continue;
+            }
+            if (CheckCollisionPointRec(touchPos, touchControls.pauseButton.rect)) {
+                touchControls.pauseButton.pressed = true;
+                touchControls.pauseButton.touchId = i;
+                continue;
+            }
+            if (CheckCollisionPointRec(touchPos, touchControls.inventoryButton.rect)) {
+                touchControls.inventoryButton.pressed = true;
+                touchControls.inventoryButton.touchId = i;
+                continue;
+            }
+            if (CheckCollisionPointRec(touchPos, touchControls.weaponButton.rect)) {
+                touchControls.weaponButton.pressed = true;
+                touchControls.weaponButton.touchId = i;
+                continue;
+            }
+            
+            // Camera control (any touch in right half of screen not on buttons)
+            if (touchPos.x > screenWidth * 0.4f) {
+                if (touchControls.cameraTouchId == -1 || touchControls.cameraTouchId == i) {
+                    if (touchControls.cameraTouchId == -1) {
+                        touchControls.lastCameraTouch = touchPos;
+                    }
+                    touchControls.cameraTouchId = i;
+                }
+            }
+        }
+        
+        // Release joystick if touch ended
+        if (touchControls.moveJoystick.touchId >= 0 && 
+            (touchControls.moveJoystick.touchId >= touchCount || !activeTouchIds[touchControls.moveJoystick.touchId])) {
+            touchControls.moveJoystick.active = false;
+            touchControls.moveJoystick.touchId = -1;
+            touchControls.moveJoystick.knobPos = touchControls.moveJoystick.center;
+            touchControls.moveJoystick.direction = {0.0f, 0.0f};
+        }
+        
+        // Release camera touch
+        if (touchControls.cameraTouchId >= 0 && 
+            (touchControls.cameraTouchId >= touchCount || !activeTouchIds[touchControls.cameraTouchId])) {
+            touchControls.cameraTouchId = -1;
+        }
+#endif
+    };
+
+    auto drawTouchControls = [&]() {
+#ifdef PLATFORM_ANDROID
+        // Draw joystick
+        if (touchControls.moveJoystick.active || true) { // Always show for visibility
+            DrawCircleV(touchControls.moveJoystick.center, touchControls.moveJoystick.radius, 
+                       Fade(DARKGRAY, 0.3f));
+            DrawCircleLinesV(touchControls.moveJoystick.center, touchControls.moveJoystick.radius, 
+                            Fade(WHITE, 0.5f));
+            
+            Vector2 knobPos = touchControls.moveJoystick.active ? 
+                             touchControls.moveJoystick.knobPos : 
+                             touchControls.moveJoystick.center;
+            DrawCircleV(knobPos, touchControls.moveJoystick.knobRadius, 
+                       Fade(WHITE, touchControls.moveJoystick.active ? 0.7f : 0.4f));
+        }
+        
+        // Helper to draw button
+        auto drawButton = [](const TouchButton& btn) {
+            Color col = btn.pressed ? Fade(btn.color, 0.9f) : Fade(btn.color, btn.alpha);
+            DrawRectangleRounded(btn.rect, 0.2f, 8, col);
+            DrawRectangleRoundedLines(btn.rect, 0.2f, 8, Fade(WHITE, 0.8f));
+            
+            int fontSize = static_cast<int>(btn.rect.height * 0.3f);
+            int textWidth = MeasureText(btn.label, fontSize);
+            DrawText(btn.label, 
+                    static_cast<int>(btn.rect.x + btn.rect.width / 2 - textWidth / 2),
+                    static_cast<int>(btn.rect.y + btn.rect.height / 2 - fontSize / 2),
+                    fontSize, WHITE);
+        };
+        
+        drawButton(touchControls.shootButton);
+        drawButton(touchControls.jumpButton);
+        drawButton(touchControls.pauseButton);
+        drawButton(touchControls.inventoryButton);
+        drawButton(touchControls.weaponButton);
+#endif
+    };
+
+    initTouchControls();
     startWave(1);
 
     while (!shouldExit) {
@@ -903,6 +1160,17 @@ int main() {
         screenWidth = GetScreenWidth();
         screenHeight = GetScreenHeight();
         const float dt = GetFrameTime();
+        
+        // Reinitialize touch controls if screen size changed
+#ifdef PLATFORM_ANDROID
+        static int lastScreenWidth = screenWidth;
+        static int lastScreenHeight = screenHeight;
+        if (screenWidth != lastScreenWidth || screenHeight != lastScreenHeight) {
+            initTouchControls();
+            lastScreenWidth = screenWidth;
+            lastScreenHeight = screenHeight;
+        }
+#endif
 
         recvNetworkPackets();
         netSendCooldown = std::max(0.0f, netSendCooldown - dt);
@@ -1013,7 +1281,9 @@ int main() {
                 screenState = ScreenState::Playing;
                 pauseSelection = 0;
                 resetGame();
+#ifndef PLATFORM_ANDROID
                 DisableCursor();
+#endif
                 continue;
             }
 
@@ -1102,7 +1372,9 @@ int main() {
                 screenState = ScreenState::Playing;
                 pauseSelection = 0;
                 resetGame();
+#ifndef PLATFORM_ANDROID
                 DisableCursor();
+#endif
             };
 
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -1167,7 +1439,9 @@ int main() {
             if (paused) {
                 EnableCursor();
             } else {
+#ifndef PLATFORM_ANDROID
                 DisableCursor();
+#endif
             }
         }
 
@@ -1206,7 +1480,9 @@ int main() {
             auto triggerPauseAction = [&](int action) {
                 if (action == 0) {
                     paused = false;
+#ifndef PLATFORM_ANDROID
                     DisableCursor();
+#endif
                 } else if (action == 1) {
                     applyResolutionIndex(currentResolutionIndex + 1);
                 } else if (action == 2) {
@@ -1254,12 +1530,64 @@ int main() {
         } else if (!paused) {
             bool onlineClient = (gameMode == GameMode::Online && netRole == NetRole::Client);
 
+            // Update touch controls
+            updateTouchControls();
+            
+#ifdef PLATFORM_ANDROID
+            // Handle pause button press
+            static bool lastPausePressed = false;
+            if (touchControls.pauseButton.pressed && !lastPausePressed) {
+                paused = true;
+                EnableCursor();
+            }
+            lastPausePressed = touchControls.pauseButton.pressed;
+            
+            // Handle inventory button press
+            static bool lastInvPressed = false;
+            if (touchControls.inventoryButton.pressed && !lastInvPressed && !shopOpen) {
+                inventoryOpen = !inventoryOpen;
+                // On Android, keep cursor visible for touch input
+                inventorySwapFrom = -1;
+            }
+            lastInvPressed = touchControls.inventoryButton.pressed;
+            
+            // Handle weapon switch button
+            static bool lastWeaponPressed = false;
+            if (touchControls.weaponButton.pressed && !lastWeaponPressed && !shopOpen && !inventoryOpen) {
+                // Cycle to next owned weapon
+                for (int i = 1; i <= MAX_INVENTORY_SLOTS; ++i) {
+                    int nextSlot = (currentWeaponSlot + i) % MAX_INVENTORY_SLOTS;
+                    if (inventory[nextSlot].owned) {
+                        currentWeaponSlot = nextSlot;
+                        break;
+                    }
+                }
+            }
+            lastWeaponPressed = touchControls.weaponButton.pressed;
+#endif
+
             if (!shopOpen && !inventoryOpen) {
+#ifdef PLATFORM_ANDROID
+                // Touch-based camera control
+                if (touchControls.cameraTouchId >= 0) {
+                    Vector2 currentTouch = GetTouchPosition(touchControls.cameraTouchId);
+                    Vector2 delta = Vector2Subtract(currentTouch, touchControls.lastCameraTouch);
+                    
+                    const float touchSensitivity = 0.003f;
+                    yaw -= delta.x * touchSensitivity;
+                    pitch -= delta.y * touchSensitivity;
+                    pitch = Clamp(pitch, -1.4f, 1.4f);
+                    
+                    touchControls.lastCameraTouch = currentTouch;
+                }
+#else
+                // Mouse-based camera control
                 Vector2 mouse = GetMouseDelta();
                 const float mouseSensitivity = 0.0026f;
                 yaw -= mouse.x * mouseSensitivity;
                 pitch -= mouse.y * mouseSensitivity;
                 pitch = Clamp(pitch, -1.4f, 1.4f);
+#endif
             }
 
             Vector3 forward = {
@@ -1270,14 +1598,15 @@ int main() {
             Vector3 flatForward = Vector3Normalize({forward.x, 0.0f, forward.z});
             Vector3 right = Vector3Normalize(Vector3CrossProduct(flatForward, {0.0f, 1.0f, 0.0f}));
 
-            // Weapon switching with number keys
+            // Weapon switching with number keys (desktop only)
+#ifndef PLATFORM_ANDROID
             if (!shopOpen && !inventoryOpen) {
                 if (IsKeyPressed(KEY_ONE) && inventory[0].owned) currentWeaponSlot = 0;
                 if (IsKeyPressed(KEY_TWO) && inventory[1].owned) currentWeaponSlot = 1;
                 if (IsKeyPressed(KEY_THREE) && inventory[2].owned) currentWeaponSlot = 2;
             }
 
-            // Inventory toggle
+            // Inventory toggle (desktop only)
             if (IsKeyPressed(KEY_E) && !shopOpen) {
                 inventoryOpen = !inventoryOpen;
                 if (inventoryOpen) {
@@ -1287,14 +1616,28 @@ int main() {
                     inventorySwapFrom = -1;
                 }
             }
+#endif
 
             if (playerHealth > 0.0f || onlineClient) {
-                float moveSpeed = IsKeyDown(KEY_LEFT_SHIFT) ? 10.5f : 7.0f;
+                float moveSpeed = 7.0f;
                 Vector3 movement = {0.0f, 0.0f, 0.0f};
+                
+#ifdef PLATFORM_ANDROID
+                // Virtual joystick movement
+                if (touchControls.moveJoystick.active && Vector2Length(touchControls.moveJoystick.direction) > 0.1f) {
+                    Vector2 joyDir = touchControls.moveJoystick.direction;
+                    // Convert joystick direction to world space movement
+                    movement = Vector3Add(movement, Vector3Scale(flatForward, -joyDir.y));
+                    movement = Vector3Add(movement, Vector3Scale(right, joyDir.x));
+                }
+#else
+                // Keyboard movement
+                moveSpeed = IsKeyDown(KEY_LEFT_SHIFT) ? 10.5f : 7.0f;
                 if (IsKeyDown(KEY_W)) movement = Vector3Add(movement, flatForward);
                 if (IsKeyDown(KEY_S)) movement = Vector3Subtract(movement, flatForward);
                 if (IsKeyDown(KEY_D)) movement = Vector3Add(movement, right);
                 if (IsKeyDown(KEY_A)) movement = Vector3Subtract(movement, right);
+#endif
 
                 if (Vector3Length(movement) > 0.001f) {
                     movement = Vector3Scale(Vector3Normalize(movement), moveSpeed * dt);
@@ -1356,10 +1699,22 @@ int main() {
                 };
                 camera.target = Vector3Add(camera.position, onlineForward);
             } else {
+                // Jump handling
+#ifdef PLATFORM_ANDROID
+                static bool lastJumpPressed = false;
+                bool jumpPressed = touchControls.jumpButton.pressed && !lastJumpPressed;
+                lastJumpPressed = touchControls.jumpButton.pressed;
+                
+                if (playerHealth > 0.0f && grounded && jumpPressed) {
+                    verticalVelocity = 9.5f;
+                    grounded = false;
+                }
+#else
                 if (playerHealth > 0.0f && grounded && IsKeyPressed(KEY_SPACE)) {
                     verticalVelocity = 9.5f;
                     grounded = false;
                 }
+#endif
 
                 verticalVelocity -= gravity * dt;
                 camera.position.y += verticalVelocity * dt;
@@ -1372,7 +1727,15 @@ int main() {
                 camera.target = Vector3Add(camera.position, forward);
 
                 shootCooldown -= dt;
-                if (playerHealth > 0.0f && IsMouseButtonDown(MOUSE_BUTTON_LEFT) && shootCooldown <= 0.0f && !shopOpen && !inventoryOpen) {
+                
+                // Shooting handling
+#ifdef PLATFORM_ANDROID
+                bool shootDown = touchControls.shootButton.pressed;
+#else
+                bool shootDown = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
+#endif
+                
+                if (playerHealth > 0.0f && shootDown && shootCooldown <= 0.0f && !shopOpen && !inventoryOpen) {
                     WeaponType currentWeapon = inventory[currentWeaponSlot].weapon;
                     bool weaponOwned = inventory[currentWeaponSlot].owned;
 
@@ -1818,7 +2181,9 @@ int main() {
         }
 
         if (!dead && !paused && !shopOpen && !inventoryOpen && IsCursorHidden() == false) {
+#ifndef PLATFORM_ANDROID
             DisableCursor();
+#endif
         }
 
         if (gameMode == GameMode::Online && netRole == NetRole::Host && netSnapshotCooldown <= 0.0f) {
@@ -2215,6 +2580,11 @@ int main() {
         if (!paused) {
             DrawLine(screenWidth / 2 - 10, screenHeight / 2, screenWidth / 2 + 10, screenHeight / 2, WHITE);
             DrawLine(screenWidth / 2, screenHeight / 2 - 10, screenWidth / 2, screenHeight / 2 + 10, WHITE);
+        }
+
+        // Draw touch controls on Android
+        if (!paused && !shopOpen && !inventoryOpen) {
+            drawTouchControls();
         }
 
         DrawText("Potato Cannon vs Chicken Horde", 20, screenHeight - 40, 24, BLACK);
