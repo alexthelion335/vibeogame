@@ -7,6 +7,31 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
 
+# Build metadata shown for each compiled binary
+set(BUILD_PLATFORM "unknown")
+if(ANDROID)
+    set(BUILD_PLATFORM "android")
+elseif(WIN32)
+    set(BUILD_PLATFORM "windows")
+elseif(APPLE)
+    set(BUILD_PLATFORM "macos")
+elseif(UNIX)
+    set(BUILD_PLATFORM "linux")
+endif()
+
+set(BUILD_ARCH "${CMAKE_SYSTEM_PROCESSOR}")
+if(ANDROID)
+    if(DEFINED CMAKE_ANDROID_ARCH_ABI AND NOT CMAKE_ANDROID_ARCH_ABI STREQUAL "")
+        set(BUILD_ARCH "${CMAKE_ANDROID_ARCH_ABI}")
+    elseif(DEFINED ANDROID_ABI AND NOT ANDROID_ABI STREQUAL "")
+        set(BUILD_ARCH "${ANDROID_ABI}")
+    endif()
+endif()
+
+message(STATUS "ChickenPotatoFPS target platform: ${BUILD_PLATFORM}")
+message(STATUS "ChickenPotatoFPS target architecture: ${BUILD_ARCH}")
+set(TARGET_OUTPUT_BASENAME "chicken_potato_fps_${BUILD_PLATFORM}_${BUILD_ARCH}")
+
 # raylib
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_GAMES OFF CACHE BOOL "" FORCE)
@@ -70,3 +95,14 @@ else()
         target_link_libraries(chicken_potato_fps PRIVATE m dl pthread rt X11)
     endif()
 endif()
+
+if(NOT ANDROID)
+    set_target_properties(chicken_potato_fps PROPERTIES
+        OUTPUT_NAME "${TARGET_OUTPUT_BASENAME}"
+    )
+endif()
+
+add_custom_command(TARGET chicken_potato_fps POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E echo "[ChickenPotatoFPS] Built: $<TARGET_FILE:chicken_potato_fps>"
+    COMMAND ${CMAKE_COMMAND} -E echo "[ChickenPotatoFPS] Platform: ${BUILD_PLATFORM}, Architecture: ${BUILD_ARCH}"
+)

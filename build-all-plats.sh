@@ -29,7 +29,7 @@ cmake --build build-linux --config Release
 echo "Building for Android..."
 ./android/build-android.sh
 echo "The following commands might ask if you want to overwrite existing files. Please confirm to overwrite if prompted."
-cp build-android/libchicken_potato_fps.so apk-build/lib/arm64-v8a/
+cp "build-android/libchicken_potato_fps.so" "apk-build/lib/${ANDROID_ABI}/"
 cp android/AndroidManifest.xml apk-build/
 
 # Compile Java activity bridge and generate classes.dex
@@ -52,15 +52,17 @@ javac -source 1.8 -target 1.8 \
     apk-build/obj/com/vibeogame/chickenpotato/*.class
 
 cd apk-build
+APK_BASE_NAME="chicken_potato_fps-${ANDROID_ABI}"
 aapt package -f -M AndroidManifest.xml -I $ANDROID_SDK/platforms/android-33/android.jar -F temp.apk
 aapt add temp.apk classes.dex
-aapt add temp.apk lib/arm64-v8a/libchicken_potato_fps.so
-zipalign -f -v 4 temp.apk chicken_potato_fps-aligned.apk
+aapt add temp.apk "lib/${ANDROID_ABI}/libchicken_potato_fps.so"
+zipalign -f -v 4 temp.apk "${APK_BASE_NAME}-aligned.apk"
 apksigner sign \
    --ks my-release-key.keystore \
    --ks-key-alias my-key-alias \
-   --out chicken_potato_fps.apk \
-   chicken_potato_fps-aligned.apk
-apksigner verify --verbose chicken_potato_fps.apk
+    --out "${APK_BASE_NAME}.apk" \
+    "${APK_BASE_NAME}-aligned.apk"
+apksigner verify --verbose "${APK_BASE_NAME}.apk"
 cd ..
 echo "All builds completed successfully!"
+echo "Android APK: apk-build/${APK_BASE_NAME}.apk"
