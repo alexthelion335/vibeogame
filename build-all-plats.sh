@@ -60,12 +60,12 @@ fi
 javac -source 1.8 -target 1.8 \
     -classpath "$ANDROID_JAR" \
     -d apk-build/obj \
-    android/src/com/vibeogame/chickenpotato/GameActivity.java
+    android/src/com/alexkinch/chickenpotato/GameActivity.java
 
 "$BUILD_TOOLS_DIR/d8" \
     --lib "$ANDROID_JAR" \
     --output apk-build \
-    apk-build/obj/com/vibeogame/chickenpotato/*.class
+    apk-build/obj/com/alexkinch/chickenpotato/*.class
 
 cd apk-build
 APK_BASE_NAME="chicken_potato_fps-${ANDROID_ABI}"

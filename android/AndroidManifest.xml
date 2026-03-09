@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.vibeogame.chickenpotato"
+    package="com.alexkinch.chickenpotato"
     android:versionCode="2"
     android:versionName="1.2.1">
 
@@ -24,7 +24,7 @@
         android:hasCode="true">
 
         <activity
-            android:name="com.vibeogame.chickenpotato.GameActivity"
+            android:name="com.alexkinch.chickenpotato.GameActivity"
             android:label="Chicken Potato FPS"
             android:immersive="true"
             android:screenOrientation="landscape"

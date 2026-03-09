@@ -13,7 +13,7 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 
-class LegacyGameActivity extends NativeActivity {
+public class GameActivity extends NativeActivity {
     private EditText hiddenInput;
     private volatile String keyboardInputBuffer = "";
     private final Object keyboardInputLock = new Object();

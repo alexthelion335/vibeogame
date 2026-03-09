@@ -89,14 +89,14 @@ chmod +x android/build-android.sh
 ### APK won't install
 - Check device has "Unknown sources" enabled (Android < 8)
 - Check "Install unknown apps" permission (Android 8+)
-- Try `adb uninstall com.vibeogame.chickenpotato` first
+- Try `adb uninstall com.alexkinch.chickenpotato` first
 - Check for signature conflicts if reinstalling
 - If you see `INSTALL_PARSE_FAILED_NO_CERTIFICATES`, sign with `apksigner` (not only `jarsigner`) so the APK has v2/v3 signatures
 
 ### Java bridge methods not found / keyboard or immersive mode not working
-- Ensure `android/src/com/vibeogame/chickenpotato/GameActivity.java` is compiled
+- Ensure `android/src/com/alexkinch/chickenpotato/GameActivity.java` is compiled
 - Ensure `classes.dex` is added to the APK (`aapt add temp.apk classes.dex`)
-- Ensure manifest uses `com.vibeogame.chickenpotato.GameActivity` and `android:hasCode="true"`
+- Ensure manifest uses `com.alexkinch.chickenpotato.GameActivity` and `android:hasCode="true"`
 
 ### Touch controls not showing
 - Make sure PLATFORM_ANDROID is defined (automatic in CMake)
