@@ -60,6 +60,8 @@ After building, you'll have `libchicken_potato_fps.so`. To create a full APK:
 mkdir -p apk-build/lib/arm64-v8a
 cp build-android/libchicken_potato_fps.so apk-build/lib/arm64-v8a/
 cp android/AndroidManifest.xml apk-build/
+mkdir -p apk-build/res
+cp -r android/res/* apk-build/res/
 
 # Compile Java activity bridge and generate classes.dex
 mkdir -p apk-build/obj
@@ -81,7 +83,7 @@ javac -source 1.8 -target 1.8 \
 
 # Create unsigned APK (manifest/resources only)
 cd apk-build
-aapt package -f -M AndroidManifest.xml -I $ANDROID_SDK/platforms/android-33/android.jar -F temp.apk
+aapt package -f -M AndroidManifest.xml -S res -I $ANDROID_SDK/platforms/android-33/android.jar -F temp.apk
 
 # Add Java bytecode (required: manifest uses android:hasCode="true")
 aapt add temp.apk classes.dex

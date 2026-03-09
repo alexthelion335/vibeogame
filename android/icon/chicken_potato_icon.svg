@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FFB347"/>
+      <stop offset="100%" stop-color="#FF7A18"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="220" fill="url(#bg)"/>
+
+  <ellipse cx="520" cy="565" rx="280" ry="235" fill="#D2A267" filter="url(#shadow)"/>
+
+  <circle cx="430" cy="430" r="130" fill="#FFF8E8" filter="url(#shadow)"/>
+
+  <circle cx="370" cy="308" r="34" fill="#E53935"/>
+  <circle cx="430" cy="286" r="38" fill="#E53935"/>
+  <circle cx="492" cy="308" r="34" fill="#E53935"/>
+
+  <polygon points="532,430 610,455 532,480" fill="#F9A825"/>
+
+  <circle cx="418" cy="420" r="18" fill="#1F1F1F"/>
+  <circle cx="410" cy="412" r="6" fill="#FFFFFF"/>
+
+  <ellipse cx="610" cy="590" rx="24" ry="18" fill="#B9864F" opacity="0.55"/>
+  <ellipse cx="475" cy="650" rx="18" ry="13" fill="#B9864F" opacity="0.5"/>
+  <ellipse cx="690" cy="670" rx="20" ry="15" fill="#B9864F" opacity="0.5"/>
+</svg>

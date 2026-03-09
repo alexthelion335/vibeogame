@@ -20,6 +20,8 @@
     <application
         android:allowBackup="false"
         android:label="Chicken Potato FPS"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
         android:hasCode="true">
 
