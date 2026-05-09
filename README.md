@@ -86,3 +86,11 @@ cmake --build build
 - `Online Multiplayer`: choose `Host Game` or `Join Game` and enter host IPv4 (default `127.0.0.1`)
 
 Online mode uses UDP port `42069`.
+
+## Documentation
+
+- [Android Port Guide](ANDROID_PORT.md) — Building and running on Android with NDK toolchain
+- [Android Quick Start](ANDROID_QUICKSTART.md) — Quick APK build instructions
+- [Web Build Guide](WEB_BUILD.md) — Emscripten and Web (WASM) build setup
+- [Cross-Compilation Guide](CROSS_COMPILE.md) — MinGW and other cross-platform builds
+- [Godot Engine Migration](GODOT_MIGRATION.md) — Roadmap for migrating to Godot while retaining C++ gameplay core
