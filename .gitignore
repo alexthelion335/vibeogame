@@ -5,6 +5,7 @@ build-android/
 build-web/
 apk-build/
 highscores.txt
+build-test/
 
 # Emscripten SDK (developers install locally)
 emsdk/

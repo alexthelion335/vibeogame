@@ -58,7 +58,7 @@ FetchContent_MakeAvailable(raylib)
 
 # Android builds as shared library, others as executable
 if(ANDROID)
-    add_library(chicken_potato_fps SHARED src/main.cpp)
+    add_library(chicken_potato_fps SHARED src/main.cpp src/game_core.cpp src/raylib_bridge.cpp)
 
     # Ensure NDK native_app_glue headers are available to game code
     set(NATIVE_APP_GLUE_DIR "")
@@ -89,7 +89,7 @@ if(ANDROID)
     # Define PLATFORM_ANDROID for conditional compilation
     target_compile_definitions(chicken_potato_fps PRIVATE PLATFORM_ANDROID)
 else()
-    add_executable(chicken_potato_fps src/main.cpp)
+    add_executable(chicken_potato_fps src/main.cpp src/game_core.cpp src/raylib_bridge.cpp)
     target_link_libraries(chicken_potato_fps PRIVATE raylib)
     
     if(EMSCRIPTEN)
