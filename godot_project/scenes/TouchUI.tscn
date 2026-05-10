@@ -1,0 +1,23 @@
+[gd_scene load_steps=2 format=3]
+
+[node name="TouchUI" type="CanvasLayer"]
+
+[node name="LeftZone" type="Panel" parent="."]
+anchors_preset = 3
+anchor_right = 0.45
+anchor_bottom = 1.0
+
+[node name="RightZone" type="Panel" parent="."]
+anchors_preset = 11
+anchor_left = 0.55
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+
+[node name="FireButton" type="Button" parent="RightZone"]
+anchors_preset = 12
+anchor_left = 0.65
+anchor_top = 0.6
+anchor_right = 0.95
+anchor_bottom = 0.9
+text = "FIRE"

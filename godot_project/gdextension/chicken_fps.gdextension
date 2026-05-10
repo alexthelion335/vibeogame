@@ -1,0 +1,7 @@
+[configuration]
+entry_symbol = "chicken_fps_library_init"
+compatibility_minimum = "4.6"
+reloadable = true
+
+[libraries]
+linux.x86_64 = "res://gdextension/bin/linux/libchicken_fps.so"

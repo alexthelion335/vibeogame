@@ -6,6 +6,11 @@ build-web/
 apk-build/
 highscores.txt
 build-test/
+godot_project/gdextension/bin/
+godot_project/gdextension/build/
+godot_project/.godot/shader_cache/
+godot_project/.godot/imported/
+godot_project/.godot/editor/
 
 # Emscripten SDK (developers install locally)
 emsdk/

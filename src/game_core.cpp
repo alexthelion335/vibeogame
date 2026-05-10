@@ -417,10 +417,15 @@ void update(GameState& state, const InputState& input, float delta) {
                     // Single potato
                     Potato p{};
                     Vector3 fwd{
-                        std::cos(state.pitch) * std::sin(state.yaw),
-                        std::sin(state.pitch),
-                        std::cos(state.pitch) * std::cos(state.yaw)
+                        std::cos(state.yaw),
+                        0.0f,
+                        std::sin(state.yaw)
                     };
+                    if (Vector3LengthSqr(fwd) < 0.0001f) {
+                        fwd = {0.0f, 0.0f, -1.0f};
+                    } else {
+                        fwd = Vector3Normalize(fwd);
+                    }
                     p.pos = state.camera_position + fwd * 1.1f;
                     p.vel = fwd * 25.0f;
                     p.life = 5.0f;
@@ -431,10 +436,15 @@ void update(GameState& state, const InputState& input, float delta) {
                 } else if (current_weapon == WeaponType::PotatoShotgun) {
                     // Shotgun spread
                     Vector3 fwd{
-                        std::cos(state.pitch) * std::sin(state.yaw),
-                        std::sin(state.pitch),
-                        std::cos(state.pitch) * std::cos(state.yaw)
+                        std::cos(state.yaw),
+                        0.0f,
+                        std::sin(state.yaw)
                     };
+                    if (Vector3LengthSqr(fwd) < 0.0001f) {
+                        fwd = {0.0f, 0.0f, -1.0f};
+                    } else {
+                        fwd = Vector3Normalize(fwd);
+                    }
                     Vector3 right_dir = Vector3(0.0f, 1.0f, 0.0f).cross(fwd).normalized();
                     Vector3 up_dir = fwd.cross(right_dir).normalized();
                     
@@ -455,10 +465,15 @@ void update(GameState& state, const InputState& input, float delta) {
                     // Grenade
                     GrenadeProjectile g{};
                     Vector3 fwd{
-                        std::cos(state.pitch) * std::sin(state.yaw),
-                        std::sin(state.pitch),
-                        std::cos(state.pitch) * std::cos(state.yaw)
+                        std::cos(state.yaw),
+                        0.0f,
+                        std::sin(state.yaw)
                     };
+                    if (Vector3LengthSqr(fwd) < 0.0001f) {
+                        fwd = {0.0f, 0.0f, -1.0f};
+                    } else {
+                        fwd = Vector3Normalize(fwd);
+                    }
                     g.pos = state.camera_position + fwd * 1.1f;
                     g.vel = fwd * 15.0f;
                     g.fuseTimer = 2.0f;
