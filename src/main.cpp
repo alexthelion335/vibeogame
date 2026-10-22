@@ -637,9 +637,9 @@ int main() {
     int pauseSelection = 0;
 
 #ifndef PLATFORM_ANDROID
-    const int monitor = GetCurrentMonitor();
-    const int monitorWidth = GetMonitorWidth(monitor);
-    const int monitorHeight = GetMonitorHeight(monitor);
+    int selectedMonitor = GetCurrentMonitor();
+    const int monitorWidth = GetMonitorWidth(selectedMonitor);
+    const int monitorHeight = GetMonitorHeight(selectedMonitor);
 
     int bestResolutionIndex = 0;
     int bestResolutionDistance = 1 << 30;
@@ -656,6 +656,7 @@ int main() {
 
     SetWindowSize(monitorWidth, monitorHeight);
     ToggleFullscreen();
+    SetWindowMonitor(selectedMonitor);
 #else
     // Android is already fullscreen via NativeActivity window handling.
     fullscreen = true;
@@ -966,10 +967,17 @@ int main() {
                           static_cast<int>(resolutionOptions[currentResolutionIndex].y));
             ToggleFullscreen();
             fullscreen = true;
+            SetWindowMonitor(selectedMonitor);
         } else {
             ToggleFullscreen();
             fullscreen = false;
             SetWindowSize(windowedWidth, windowedHeight);
+            Vector2 monitorPosition = GetMonitorPosition(selectedMonitor);
+            int monitorWidth = GetMonitorWidth(selectedMonitor);
+            int monitorHeight = GetMonitorHeight(selectedMonitor);
+            SetWindowPosition(
+                static_cast<int>(monitorPosition.x) + (monitorWidth - windowedWidth) / 2,
+                static_cast<int>(monitorPosition.y) + (monitorHeight - windowedHeight) / 2);
         }
 #endif
     };
@@ -1117,6 +1125,25 @@ int main() {
             }
         }
     };
+
+#ifndef PLATFORM_ANDROID
+    auto applyMonitorIndex = [&](int newMonitor) {
+        const int monitorCount = GetMonitorCount();
+        if (monitorCount <= 0) return;
+        selectedMonitor = (newMonitor % monitorCount + monitorCount) % monitorCount;
+
+        if (fullscreen) {
+            SetWindowMonitor(selectedMonitor);
+        } else {
+            Vector2 monitorPosition = GetMonitorPosition(selectedMonitor);
+            int monitorWidth = GetMonitorWidth(selectedMonitor);
+            int monitorHeight = GetMonitorHeight(selectedMonitor);
+            SetWindowPosition(
+                static_cast<int>(monitorPosition.x) + (monitorWidth - windowedWidth) / 2,
+                static_cast<int>(monitorPosition.y) + (monitorHeight - windowedHeight) / 2);
+        }
+    };
+#endif
 
     auto setupOnlineHost = [&]() -> bool {
         closeNetwork();
@@ -1927,17 +1954,20 @@ int main() {
         }
 
         const int panelW = 560;
-        const int panelH = 320;
+        const int panelH = 380;
         const int panelX = screenWidth / 2 - panelW / 2;
         const int panelY = screenHeight / 2 - panelH / 2;
 
         Rectangle resumeRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 96), 420.0f, 40.0f};
         Rectangle resolutionRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 146), 420.0f, 40.0f};
         Rectangle displayModeRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 196), 420.0f, 40.0f};
-        Rectangle quitRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 246), 420.0f, 40.0f};
+        Rectangle monitorRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 246), 420.0f, 40.0f};
+        Rectangle quitRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 296), 420.0f, 40.0f};
 
         Rectangle resLeftRect = {static_cast<float>(panelX + 440), static_cast<float>(panelY + 148), 26.0f, 32.0f};
         Rectangle resRightRect = {static_cast<float>(panelX + 474), static_cast<float>(panelY + 148), 26.0f, 32.0f};
+        Rectangle monitorLeftRect = {static_cast<float>(panelX + 440), static_cast<float>(panelY + 248), 26.0f, 32.0f};
+        Rectangle monitorRightRect = {static_cast<float>(panelX + 474), static_cast<float>(panelY + 248), 26.0f, 32.0f};
 
         if (screenState == ScreenState::Intro) {
             if (IsCursorHidden()) {
@@ -2395,10 +2425,10 @@ int main() {
 
         if (paused && !dead) {
             if (IsKeyPressed(KEY_UP)) {
-                pauseSelection = (pauseSelection + 3) % 4;
+                pauseSelection = (pauseSelection + 4) % 5;
             }
             if (IsKeyPressed(KEY_DOWN)) {
-                pauseSelection = (pauseSelection + 1) % 4;
+                pauseSelection = (pauseSelection + 1) % 5;
             }
 
             if (pauseSelection == 1) {
@@ -2409,12 +2439,23 @@ int main() {
                     applyResolutionIndex(currentResolutionIndex + 1);
                 }
             }
+#ifndef PLATFORM_ANDROID
+            if (pauseSelection == 3) {
+                if (IsKeyPressed(KEY_LEFT)) {
+                    applyMonitorIndex(selectedMonitor - 1);
+                }
+                if (IsKeyPressed(KEY_RIGHT)) {
+                    applyMonitorIndex(selectedMonitor + 1);
+                }
+            }
+#endif
 
             Vector2 mousePos = GetMousePosition();
             if (CheckCollisionPointRec(mousePos, resumeRect)) pauseSelection = 0;
             else if (CheckCollisionPointRec(mousePos, resolutionRect)) pauseSelection = 1;
             else if (CheckCollisionPointRec(mousePos, displayModeRect)) pauseSelection = 2;
-            else if (CheckCollisionPointRec(mousePos, quitRect)) pauseSelection = 3;
+            else if (CheckCollisionPointRec(mousePos, monitorRect)) pauseSelection = 3;
+            else if (CheckCollisionPointRec(mousePos, quitRect)) pauseSelection = 4;
 
             auto triggerPauseAction = [&](int action) {
                 if (action == 0) {
@@ -2427,6 +2468,10 @@ int main() {
                 } else if (action == 2) {
                     toggleFullscreenWindowed();
                 } else if (action == 3) {
+#ifndef PLATFORM_ANDROID
+                    applyMonitorIndex(selectedMonitor + 1);
+#endif
+                } else if (action == 4) {
                     shouldExit = true;
                 }
             };
@@ -2442,8 +2487,18 @@ int main() {
                     triggerPauseAction(1);
                 } else if (CheckCollisionPointRec(mousePos, displayModeRect)) {
                     triggerPauseAction(2);
-                } else if (CheckCollisionPointRec(mousePos, quitRect)) {
+                } else if (CheckCollisionPointRec(mousePos, monitorLeftRect)) {
+#ifndef PLATFORM_ANDROID
+                    applyMonitorIndex(selectedMonitor - 1);
+#endif
+                } else if (CheckCollisionPointRec(mousePos, monitorRightRect)) {
+#ifndef PLATFORM_ANDROID
+                    applyMonitorIndex(selectedMonitor + 1);
+#endif
+                } else if (CheckCollisionPointRec(mousePos, monitorRect)) {
                     triggerPauseAction(3);
+                } else if (CheckCollisionPointRec(mousePos, quitRect)) {
+                    triggerPauseAction(4);
                 }
             }
 
@@ -4163,17 +4218,26 @@ int main() {
             Color resumeColor = (pauseSelection == 0) ? YELLOW : RAYWHITE;
             Color resColor = (pauseSelection == 1) ? YELLOW : RAYWHITE;
             Color displayModeColor = (pauseSelection == 2) ? YELLOW : RAYWHITE;
-            Color quitColor = (pauseSelection == 3) ? YELLOW : RAYWHITE;
+            Color monitorColor = (pauseSelection == 3) ? YELLOW : RAYWHITE;
+            Color quitColor = (pauseSelection == 4) ? YELLOW : RAYWHITE;
 
             DrawText("Resume", panelX + 70, panelY + 100, 34, resumeColor);
             DrawText(TextFormat("Resolution: %ix%i", static_cast<int>(resolutionOptions[currentResolutionIndex].x), static_cast<int>(resolutionOptions[currentResolutionIndex].y)), panelX + 70, panelY + 152, 30, resColor);
             DrawText("<", panelX + 444, panelY + 152, 30, resColor);
             DrawText(">", panelX + 478, panelY + 152, 30, resColor);
             DrawText(TextFormat("Display Mode: %s", fullscreen ? "Fullscreen" : "Windowed"), panelX + 70, panelY + 202, 30, displayModeColor);
-            DrawText("Quit Game", panelX + 70, panelY + 252, 34, quitColor);
+ #ifdef PLATFORM_ANDROID
+            DrawText("Monitor: Android display", panelX + 70, panelY + 252, 30, monitorColor);
+ #else
+            DrawText(TextFormat("Monitor: %i / %i", selectedMonitor + 1, GetMonitorCount()),
+                     panelX + 70, panelY + 252, 30, monitorColor);
+            DrawText("<", panelX + 444, panelY + 252, 30, monitorColor);
+            DrawText(">", panelX + 478, panelY + 252, 30, monitorColor);
+ #endif
+            DrawText("Quit Game", panelX + 70, panelY + 302, 34, quitColor);
 
-            DrawText("Mouse: Click items   Resolution arrows work with mouse", panelX + 70, panelY + 286, 18, LIGHTGRAY);
-            DrawText("UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 304, 18, LIGHTGRAY);
+            DrawText("Mouse: Click items   Arrows change resolution/monitor", panelX + 70, panelY + 336, 18, LIGHTGRAY);
+            DrawText("UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 354, 18, LIGHTGRAY);
         }
 
         EndDrawing();
