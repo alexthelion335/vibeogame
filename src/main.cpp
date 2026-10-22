@@ -826,7 +826,7 @@ int main() {
             camera.position.z + std::sin(ang) * dist
         };
         boss.speed = tier >= 2 ? 1.65f : 2.0f;
-        boss.hp = tier >= 2 ? 1000.0f + wave * 30.0f : 350.0f + wave * 15.0f;
+        boss.hp = tier >= 2 ? 1400.0f + wave * 40.0f : 600.0f + wave * 25.0f;
         boss.radius = tier >= 2 ? 1.05f : 0.85f;
         boss.wobble = RandRange(0.0f, 10.0f);
         boss.facingYaw = ang + PI;
@@ -3126,11 +3126,14 @@ int main() {
             // Update med packs
             for (auto& mp : medPacks) {
                 mp.bobTimer += dt;
-                if (playerHealth > 0.0f && Vector3Distance(mp.pos, camera.position) < 1.5f) {
+                if (playerHealth > 0.0f && playerHealth < 100.0f &&
+                    Vector3Distance(mp.pos, camera.position) < 1.5f) {
                     playerHealth = 100.0f;
                     mp.active = false;
                 }
-                if ((gameMode == GameMode::CoOp || gameMode == GameMode::Online) && coopHealth > 0.0f && Vector3Distance(mp.pos, coopPos) < 1.5f) {
+                if ((gameMode == GameMode::CoOp || gameMode == GameMode::Online) &&
+                    coopHealth > 0.0f && coopHealth < 100.0f &&
+                    Vector3Distance(mp.pos, coopPos) < 1.5f) {
                     coopHealth = 100.0f;
                     mp.active = false;
                 }
@@ -3292,8 +3295,9 @@ int main() {
                     if (playerHealth <= 0.0f) playerHealth = 100.0f;
                     if (coopHealth <= 0.0f) coopHealth = 100.0f;
                 }
-                // 25% chance to spawn med pack
-                if (GetRandomValue(1, 4) == 1) {
+                // Give each completed wave a visible healing opportunity. In co-op,
+                // each player gets a separate pack so one player cannot consume both.
+                {
                     MedPack mp{};
                     float ang = RandRange(0.0f, 2.0f * PI);
                     float dist = RandRange(5.0f, 15.0f);
@@ -3482,6 +3486,7 @@ int main() {
             bodyPos.y = 0.65f + std::sin(c.wobble) * 0.06f;
             Vector3 forwardDir = {std::sin(c.facingYaw), 0.0f, std::cos(c.facingYaw)};
             Vector3 rightDir = {forwardDir.z, 0.0f, -forwardDir.x};
+            float visualScale = c.bossTier >= 2 ? 1.8f : (c.bossTier == 1 ? 1.45f : 1.0f);
 
             // More accurate dynamic planar shadows (projected from sun direction)
             DrawProjectedShadowCapsule(
@@ -3531,10 +3536,13 @@ int main() {
 
             auto LocalToChicken = [&](float right, float up, float forward) {
                 Vector3 p = bodyPos;
-                p = Vector3Add(p, Vector3Scale(rightDir, right));
-                p = Vector3Add(p, {0.0f, up, 0.0f});
-                p = Vector3Add(p, Vector3Scale(forwardDir, forward));
+                p = Vector3Add(p, Vector3Scale(rightDir, right * visualScale));
+                p = Vector3Add(p, {0.0f, up * visualScale, 0.0f});
+                p = Vector3Add(p, Vector3Scale(forwardDir, forward * visualScale));
                 return p;
+            };
+            auto Scaled = [&](float value) {
+                return value * visualScale;
             };
 
             float step = std::sin(c.wobble * 1.8f);
@@ -3552,23 +3560,23 @@ int main() {
             Vector3 beakBase = LocalToChicken(0.0f, 0.33f, 0.60f);
             Vector3 beakTip = LocalToChicken(0.0f, 0.30f, 0.77f);
 
-            DrawSphere(LocalToChicken(0.0f, 0.00f, -0.02f), 0.47f, bodyColor);
-            DrawSphere(LocalToChicken(0.0f, 0.05f, 0.22f), 0.38f, chestColor);
+            DrawSphere(LocalToChicken(0.0f, 0.00f, -0.02f), Scaled(0.47f), bodyColor);
+            DrawSphere(LocalToChicken(0.0f, 0.05f, 0.22f), Scaled(0.38f), chestColor);
 
-            DrawSphere(LocalToChicken(0.34f, 0.04f, 0.00f), 0.19f, wingColor);
-            DrawSphere(LocalToChicken(-0.34f, 0.04f, 0.00f), 0.19f, wingColor);
-            DrawCube(LocalToChicken(0.34f, 0.01f, 0.04f), 0.08f, 0.18f, 0.30f, wingRibColor);
-            DrawCube(LocalToChicken(-0.34f, 0.01f, 0.04f), 0.08f, 0.18f, 0.30f, wingRibColor);
+            DrawSphere(LocalToChicken(0.34f, 0.04f, 0.00f), Scaled(0.19f), wingColor);
+            DrawSphere(LocalToChicken(-0.34f, 0.04f, 0.00f), Scaled(0.19f), wingColor);
+            DrawCube(LocalToChicken(0.34f, 0.01f, 0.04f), Scaled(0.08f), Scaled(0.18f), Scaled(0.30f), wingRibColor);
+            DrawCube(LocalToChicken(-0.34f, 0.01f, 0.04f), Scaled(0.08f), Scaled(0.18f), Scaled(0.30f), wingRibColor);
 
             Vector3 head = LocalToChicken(0.0f, 0.33f, 0.42f);
-            DrawSphere(head, 0.24f, headColor);
-            DrawSphere(LocalToChicken(0.00f, 0.57f, 0.40f), 0.10f, ScaleColor(RED, 0.95f * combLight));
-            DrawSphere(LocalToChicken(0.07f, 0.41f, 0.59f), 0.038f, RAYWHITE);
-            DrawSphere(LocalToChicken(-0.07f, 0.41f, 0.59f), 0.038f, RAYWHITE);
-            DrawSphere(LocalToChicken(0.07f, 0.405f, 0.615f), 0.016f, BLACK);
-            DrawSphere(LocalToChicken(-0.07f, 0.405f, 0.615f), 0.016f, BLACK);
+            DrawSphere(head, Scaled(0.24f), headColor);
+            DrawSphere(LocalToChicken(0.00f, 0.57f, 0.40f), Scaled(0.10f), ScaleColor(RED, 0.95f * combLight));
+            DrawSphere(LocalToChicken(0.07f, 0.41f, 0.59f), Scaled(0.038f), RAYWHITE);
+            DrawSphere(LocalToChicken(-0.07f, 0.41f, 0.59f), Scaled(0.038f), RAYWHITE);
+            DrawSphere(LocalToChicken(0.07f, 0.405f, 0.615f), Scaled(0.016f), BLACK);
+            DrawSphere(LocalToChicken(-0.07f, 0.405f, 0.615f), Scaled(0.016f), BLACK);
 
-            DrawCylinderEx(beakBase, beakTip, 0.05f, 0.01f, 10, ScaleColor(ORANGE, 0.9f + 0.2f * beakLight));
+            DrawCylinderEx(beakBase, beakTip, Scaled(0.05f), Scaled(0.01f), 10, ScaleColor(ORANGE, 0.9f + 0.2f * beakLight));
 
             Vector3 leftHip = LocalToChicken(0.12f, -0.24f, 0.10f);
             Vector3 rightHip = LocalToChicken(-0.12f, -0.24f, 0.10f);
@@ -3590,11 +3598,11 @@ int main() {
             if (c.isBrown) {
                 Vector3 cannonBase = LocalToChicken(0.24f, 0.02f, 0.14f);
                 Vector3 cannonTip = LocalToChicken(0.24f, 0.02f, 0.58f);
-                DrawCylinderEx(cannonBase, cannonTip, 0.055f, 0.045f, 10, ScaleColor(DARKGRAY, 0.9f + 0.3f * bodyLight));
+                DrawCylinderEx(cannonBase, cannonTip, Scaled(0.055f), Scaled(0.045f), 10, ScaleColor(DARKGRAY, 0.9f + 0.3f * bodyLight));
             }
 
-            float maxChickenHp = c.bossTier >= 2 ? 1000.0f + wave * 30.0f
-                                                  : (c.bossTier == 1 ? 350.0f + wave * 15.0f : 20.0f + wave * 4.0f);
+            float maxChickenHp = c.bossTier >= 2 ? 1400.0f + wave * 40.0f
+                                                  : (c.bossTier == 1 ? 600.0f + wave * 25.0f : 20.0f + wave * 4.0f);
             float hpRatio = c.hp / maxChickenHp;
             hpRatio = Clamp(hpRatio, 0.0f, 1.0f);
 
