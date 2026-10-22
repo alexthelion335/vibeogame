@@ -124,6 +124,7 @@ enum class GameMode {
 
 enum class ScreenState {
     Intro,
+    Settings,
     OnlineSetup,
     OnlineLobby,
     Playing
@@ -682,6 +683,7 @@ int main() {
     GameMode gameMode = GameMode::SinglePlayer;
     ScreenState screenState = ScreenState::Intro;
     int introSelection = 0;
+    bool suppressIntroActivation = false;
     int onlineSetupSelection = 0;
     bool onlineIpFocused = true;
     Vector3 coopPos = {2.5f, playerHeight, 8.0f};
@@ -2032,7 +2034,7 @@ int main() {
             }
 
             const int introW = std::min(960, std::max(620, screenWidth - 180));
-            const int introH = 600;
+            const int introH = 700;
             const int introX = screenWidth / 2 - introW / 2;
             const int introY = screenHeight / 2 - introH / 2;
             const int centerX = introX + introW / 2;
@@ -2041,6 +2043,7 @@ int main() {
             Rectangle coopRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 232), static_cast<float>(introW - 96), 80.0f};
             Rectangle onlineRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 324), static_cast<float>(introW - 96), 80.0f};
             Rectangle highscoreRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 416), static_cast<float>(introW - 96), 80.0f};
+            Rectangle settingsRect = {static_cast<float>(introX + 48), static_cast<float>(introY + 508), static_cast<float>(introW - 96), 80.0f};
 
             if (IsKeyPressed(KEY_ESCAPE)) {
                 shouldExit = true;
@@ -2052,16 +2055,20 @@ int main() {
             const bool coopHover = CheckCollisionPointRec(mousePos, coopRect);
             const bool onlineHover = CheckCollisionPointRec(mousePos, onlineRect);
             const bool highscoreHover = CheckCollisionPointRec(mousePos, highscoreRect);
+            const bool settingsHover = CheckCollisionPointRec(mousePos, settingsRect);
 
             if (singleHover) introSelection = 0;
             else if (coopHover) introSelection = 1;
             else if (onlineHover) introSelection = 2;
             else if (highscoreHover) introSelection = 3;
+            else if (settingsHover) introSelection = 4;
 
             GameMode selectedMode = GameMode::SinglePlayer;
             bool startSelectedMode = false;
             bool openOnlineSetup = false;
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            bool allowIntroActivation = !suppressIntroActivation;
+            suppressIntroActivation = false;
+            if (allowIntroActivation && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 if (singleHover) {
                     introSelection = 0;
                     selectedMode = GameMode::SinglePlayer;
@@ -2075,6 +2082,8 @@ int main() {
                     openOnlineSetup = true;
                 } else if (highscoreHover) {
                     viewingHighscores = true;
+                } else if (settingsHover) {
+                    screenState = ScreenState::Settings;
                 }
             }
 
@@ -2112,8 +2121,117 @@ int main() {
             DrawMenuCard(coopRect, "Local Co-op", "Player 2: IJKL + Right Shift + Right Ctrl", introSelection == 1, coopHover, {118, 215, 255, 255});
             DrawMenuCard(onlineRect, "Online Multiplayer", "Host or join over LAN/Internet (UDP 42069)", introSelection == 2, onlineHover, {173, 135, 255, 255});
             DrawMenuCard(highscoreRect, "Highscores", "View top scores and initials", introSelection == 3, highscoreHover, {200, 150, 255, 255});
+            DrawMenuCard(settingsRect, "Settings", "Display, resolution, and monitor options", introSelection == 4, settingsHover, {130, 210, 255, 255});
 
             DrawCenteredTextLine("Mouse: hover + click button   |   Esc: Quit", centerX, introY + introH - 34, 20, Fade(RAYWHITE, 0.85f));
+            EndDrawing();
+            continue;
+        }
+
+        if (screenState == ScreenState::Settings) {
+            if (IsCursorHidden()) {
+                EnableCursor();
+                ShowCursor();
+            }
+
+            const int settingsW = 700;
+            const int settingsH = 440;
+            const int settingsX = screenWidth / 2 - settingsW / 2;
+            const int settingsY = screenHeight / 2 - settingsH / 2;
+            Rectangle backRect = {
+                static_cast<float>(settingsX + 40),
+                static_cast<float>(settingsY + settingsH - 68),
+                180.0f, 44.0f
+            };
+            Rectangle resolutionRect = {
+                static_cast<float>(settingsX + 54), static_cast<float>(settingsY + 120),
+                592.0f, 44.0f
+            };
+            Rectangle displayModeRect = {
+                static_cast<float>(settingsX + 54), static_cast<float>(settingsY + 178),
+                592.0f, 44.0f
+            };
+            Rectangle monitorRect = {
+                static_cast<float>(settingsX + 54), static_cast<float>(settingsY + 236),
+                592.0f, 44.0f
+            };
+            Rectangle resLeftRect = {static_cast<float>(settingsX + 560), static_cast<float>(settingsY + 126), 30.0f, 32.0f};
+            Rectangle resRightRect = {static_cast<float>(settingsX + 606), static_cast<float>(settingsY + 126), 30.0f, 32.0f};
+            Rectangle monitorLeftRect = {static_cast<float>(settingsX + 560), static_cast<float>(settingsY + 242), 30.0f, 32.0f};
+            Rectangle monitorRightRect = {static_cast<float>(settingsX + 606), static_cast<float>(settingsY + 242), 30.0f, 32.0f};
+
+            Vector2 settingsMouse = GetMousePosition();
+            bool backHover = CheckCollisionPointRec(settingsMouse, backRect);
+            bool settingsClick = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+            if (IsKeyPressed(KEY_ESCAPE) || (settingsClick && backHover)) {
+                screenState = ScreenState::Intro;
+                suppressIntroActivation = true;
+                continue;
+            }
+
+            if (settingsClick) {
+                if (CheckCollisionPointRec(settingsMouse, resLeftRect)) {
+                    applyResolutionIndex(currentResolutionIndex - 1);
+                } else if (CheckCollisionPointRec(settingsMouse, resRightRect) ||
+                           CheckCollisionPointRec(settingsMouse, resolutionRect)) {
+                    applyResolutionIndex(currentResolutionIndex + 1);
+                } else if (CheckCollisionPointRec(settingsMouse, displayModeRect)) {
+                    toggleFullscreenWindowed();
+#ifndef PLATFORM_ANDROID
+                } else if (CheckCollisionPointRec(settingsMouse, monitorLeftRect)) {
+                    applyMonitorIndex(selectedMonitor - 1);
+                } else if (CheckCollisionPointRec(settingsMouse, monitorRightRect) ||
+                           CheckCollisionPointRec(settingsMouse, monitorRect)) {
+                    applyMonitorIndex(selectedMonitor + 1);
+#endif
+                }
+            }
+
+#ifndef PLATFORM_ANDROID
+            if (IsKeyPressed(KEY_LEFT)) {
+                applyResolutionIndex(currentResolutionIndex - 1);
+            }
+            if (IsKeyPressed(KEY_RIGHT)) {
+                applyResolutionIndex(currentResolutionIndex + 1);
+            }
+#endif
+
+            BeginDrawing();
+            DrawRectangleGradientV(0, 0, screenWidth, screenHeight,
+                                   {58, 108, 158, 255}, {24, 38, 64, 255});
+            DrawRectangleRounded(
+                {static_cast<float>(settingsX), static_cast<float>(settingsY),
+                 static_cast<float>(settingsW), static_cast<float>(settingsH)},
+                0.04f, 12, Fade({8, 14, 22, 255}, 0.94f));
+            DrawRectangleRoundedLines(
+                {static_cast<float>(settingsX), static_cast<float>(settingsY),
+                 static_cast<float>(settingsW), static_cast<float>(settingsH)},
+                0.04f, 12, SKYBLUE);
+            DrawCenteredTextLine("SETTINGS", screenWidth / 2, settingsY + 28, 48, RAYWHITE);
+
+            DrawText(TextFormat("Resolution: %ix%i",
+                                static_cast<int>(resolutionOptions[currentResolutionIndex].x),
+                                static_cast<int>(resolutionOptions[currentResolutionIndex].y)),
+                     settingsX + 78, settingsY + 128, 28, RAYWHITE);
+            DrawText("<", settingsX + 568, settingsY + 130, 28, YELLOW);
+            DrawText(">", settingsX + 614, settingsY + 130, 28, YELLOW);
+            DrawText(TextFormat("Display Mode: %s", fullscreen ? "Fullscreen" : "Windowed"),
+                     settingsX + 78, settingsY + 186, 28, RAYWHITE);
+#ifdef PLATFORM_ANDROID
+            DrawText("Monitor: Android display", settingsX + 78, settingsY + 244, 28, RAYWHITE);
+#else
+            DrawText(TextFormat("Monitor: %i / %i", selectedMonitor + 1, GetMonitorCount()),
+                     settingsX + 78, settingsY + 244, 28, RAYWHITE);
+            DrawText("<", settingsX + 568, settingsY + 246, 28, YELLOW);
+            DrawText(">", settingsX + 614, settingsY + 246, 28, YELLOW);
+#endif
+            DrawRectangleRounded(backRect, 0.2f, 8, backHover ? Fade(ORANGE, 0.45f) : Fade(ORANGE, 0.28f));
+            DrawRectangleRoundedLines(backRect, 0.2f, 8, RAYWHITE);
+            DrawCenteredTextLine("Back", static_cast<int>(backRect.x + backRect.width / 2),
+                                 static_cast<int>(backRect.y) + 9, 26, RAYWHITE);
+            DrawCenteredTextLine("ESC: Back   |   Click a row or use the arrows to change settings",
+                                 screenWidth / 2, settingsY + settingsH - 28, 18,
+                                 Fade(RAYWHITE, 0.72f));
             EndDrawing();
             continue;
         }
