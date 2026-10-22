@@ -88,6 +88,10 @@ cmake --build build
 - `Co-op` (local second player): `I J K L` move, `Right Shift` shoot, `Right Ctrl` sprint
 - `Online Multiplayer`: choose `Host Game` or `Join Game` and enter host IPv4 (default `127.0.0.1`)
 
+Online multiplayer opens a lobby after connecting. Both players press `R` (or
+tap **Ready Up**) before the host can press `Enter` (or tap **Start Game**).
+The match does not simulate enemies or apply damage until the host starts it.
+
 Online mode uses UDP port `42069`. On the online setup screen, LAN hosts are
 discovered automatically; you can tap/click a discovered address to fill the
 join field. Hosts should share the displayed LAN IP with players when

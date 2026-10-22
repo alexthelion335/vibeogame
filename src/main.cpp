@@ -125,6 +125,7 @@ enum class GameMode {
 enum class ScreenState {
     Intro,
     OnlineSetup,
+    OnlineLobby,
     Playing
 };
 
@@ -184,6 +185,7 @@ constexpr uint8_t NET_DISCONNECT = 4;
 constexpr uint8_t NET_DISCOVER = 5;
 constexpr uint8_t NET_DISCOVER_REPLY = 6;
 constexpr uint8_t NET_SHOP_PURCHASE = 7;
+constexpr uint8_t NET_LOBBY = 8;
 constexpr int NET_PORT = 42069;
 constexpr int MAX_SYNC_CHICKENS = 72;
 constexpr int MAX_SYNC_POTATOES = 96;
@@ -251,6 +253,12 @@ struct NetShopPurchasePacket {
     uint8_t pad[3]{};
 };
 
+struct NetLobbyPacket {
+    NetHeader h{};
+    uint8_t ready = 0;
+    uint8_t pad[3]{};
+};
+
 struct NetSnapshotPacket {
     NetHeader h{};
     uint32_t sequence = 0;
@@ -286,6 +294,10 @@ struct NetSnapshotPacket {
     float shopTimer = 0.0f;
     int32_t chickenNuggets = 0;
     int32_t fireRateUpgradeCount = 0;
+    uint8_t lobby = 0;
+    uint8_t clientReady = 0;
+    uint8_t hostReady = 0;
+    uint8_t gameStarted = 0;
 
     NetChickenSnapshot chickens[MAX_SYNC_CHICKENS]{};
     NetPotatoSnapshot potatoes[MAX_SYNC_POTATOES]{};
@@ -701,6 +713,9 @@ int main() {
     float onlineHostYaw = PI;
     bool netDisconnected = false;
     double netLastReceiveTime = 0.0;
+    bool localReady = false;
+    bool remoteReady = false;
+    bool onlineGameStarted = false;
     std::string localIpAddress = GetLocalIpAddress();
     std::vector<std::string> discoveredHosts;
     double nextDiscoveryTime = 0.0;
@@ -993,6 +1008,9 @@ int main() {
         netHasPeer = false;
         netDisconnected = false;
         netLastReceiveTime = 0.0;
+        localReady = false;
+        remoteReady = false;
+        onlineGameStarted = false;
         netStatus.clear();
     };
 
@@ -1254,6 +1272,9 @@ int main() {
                 } else if (hdr->type == NET_SHOP_PURCHASE && bytes >= static_cast<ssize_t>(sizeof(NetShopPurchasePacket))) {
                     const NetShopPurchasePacket* purchase = reinterpret_cast<const NetShopPurchasePacket*>(buffer);
                     applyShopPurchase(purchase->item);
+                } else if (hdr->type == NET_LOBBY && bytes >= static_cast<ssize_t>(sizeof(NetLobbyPacket))) {
+                    const NetLobbyPacket* lobby = reinterpret_cast<const NetLobbyPacket*>(buffer);
+                    remoteReady = lobby->ready != 0;
                 }
             } else if (netRole == NetRole::Client) {
                 if (hdr->type == NET_DISCONNECT) {
@@ -1292,6 +1313,14 @@ int main() {
                     ownsScythe = snap->ownsScythe != 0;
                     for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
                         inventory[i].owned = (snap->inventoryOwnedMask & (1u << i)) != 0;
+                    }
+                    remoteReady = snap->hostReady != 0;
+                    onlineGameStarted = snap->gameStarted != 0;
+                    if (onlineGameStarted && screenState == ScreenState::OnlineLobby) {
+                        screenState = ScreenState::Playing;
+#ifndef PLATFORM_ANDROID
+                        DisableCursor();
+#endif
                     }
                     medPacks.clear();
                     medPacks.reserve(snap->medPackCount);
@@ -1363,6 +1392,24 @@ int main() {
 #endif
     };
 
+    auto sendLobbyState = [&]() {
+#ifdef _WIN32
+        if (netRole != NetRole::Client || netSocket == INVALID_SOCKET || !netHasPeer) return;
+#else
+        if (netRole != NetRole::Client || netSocket < 0 || !netHasPeer) return;
+#endif
+        NetLobbyPacket lobby{};
+        lobby.h.type = NET_LOBBY;
+        lobby.ready = localReady ? 1 : 0;
+#ifdef _WIN32
+        sendto(netSocket, reinterpret_cast<const char*>(&lobby), sizeof(lobby), 0,
+               reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#else
+        sendto(netSocket, &lobby, sizeof(lobby), 0,
+               reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#endif
+    };
+
     auto sendInputToHost = [&](uint8_t moveMask) {
 #ifdef _WIN32
         if (netRole != NetRole::Client || netSocket == INVALID_SOCKET || !netHasPeer) return;
@@ -1414,6 +1461,10 @@ int main() {
         snap.shopTimer = shopTimer;
         snap.chickenNuggets = chickenNuggets;
         snap.fireRateUpgradeCount = fireRateUpgradeCount;
+        snap.lobby = (screenState == ScreenState::OnlineLobby) ? 1 : 0;
+        snap.clientReady = remoteReady ? 1 : 0;
+        snap.hostReady = localReady ? 1 : 0;
+        snap.gameStarted = onlineGameStarted ? 1 : 0;
         snap.hasShieldCharge = hasShieldCharge ? 1 : 0;
         snap.ownsScythe = ownsScythe ? 1 : 0;
         for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
@@ -1842,6 +1893,9 @@ int main() {
         netSnapshotCooldown = std::max(0.0f, netSnapshotCooldown - dt);
         if (gameMode == GameMode::Online && netRole == NetRole::Client && netHasPeer && netSendCooldown <= 0.0f) {
             sendHello();
+            if (screenState == ScreenState::OnlineLobby) {
+                sendLobbyState();
+            }
             netSendCooldown = 0.5f;
         }
 
@@ -2119,7 +2173,10 @@ int main() {
                 if (!ok) return;
 
                 gameMode = GameMode::Online;
-                screenState = ScreenState::Playing;
+                screenState = ScreenState::OnlineLobby;
+                localReady = false;
+                remoteReady = false;
+                onlineGameStarted = false;
                 pauseSelection = 0;
                 resetGame();
 #ifndef PLATFORM_ANDROID
@@ -2191,6 +2248,125 @@ int main() {
             DrawCenteredTextLine("Enter: select highlighted card   |   Esc: back", centerX, setupY + setupH - 34, 20, Fade(RAYWHITE, 0.84f));
             if (!netStatus.empty()) {
                 DrawCenteredTextLine(netStatus.c_str(), centerX, setupY + 126, 24, ORANGE);
+            }
+            EndDrawing();
+            continue;
+        }
+
+        if (screenState == ScreenState::OnlineLobby) {
+            if (IsCursorHidden()) {
+                EnableCursor();
+                ShowCursor();
+            }
+
+            const int lobbyW = std::min(760, std::max(620, screenWidth - 120));
+            const int lobbyH = 520;
+            const int lobbyX = screenWidth / 2 - lobbyW / 2;
+            const int lobbyY = screenHeight / 2 - lobbyH / 2;
+            Rectangle readyRect = {
+                static_cast<float>(lobbyX + 70),
+                static_cast<float>(lobbyY + 330),
+                static_cast<float>(lobbyW - 140),
+                62.0f
+            };
+            Rectangle startRect = {
+                static_cast<float>(lobbyX + 70),
+                static_cast<float>(lobbyY + 402),
+                static_cast<float>(lobbyW - 140),
+                62.0f
+            };
+            Rectangle backRect = {
+                static_cast<float>(lobbyX + 20),
+                static_cast<float>(lobbyY + 20),
+                120.0f,
+                42.0f
+            };
+            Vector2 lobbyMouse = GetMousePosition();
+            bool readyClick = IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                              CheckCollisionPointRec(lobbyMouse, readyRect);
+            bool startClick = IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                              CheckCollisionPointRec(lobbyMouse, startRect);
+            bool backClick = IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
+                             CheckCollisionPointRec(lobbyMouse, backRect);
+#ifdef PLATFORM_ANDROID
+            static bool lobbyTouchWasDown = false;
+            bool lobbyTouchDown = GetTouchPointCount() > 0;
+            if (lobbyTouchDown && !lobbyTouchWasDown) {
+                Vector2 touch = GetTouchPosition(0);
+                readyClick = CheckCollisionPointRec(touch, readyRect);
+                startClick = CheckCollisionPointRec(touch, startRect);
+                backClick = CheckCollisionPointRec(touch, backRect);
+            }
+            lobbyTouchWasDown = lobbyTouchDown;
+#endif
+
+            if (backClick || IsKeyPressed(KEY_ESCAPE)) {
+                closeNetwork();
+                resetGame();
+                screenState = ScreenState::Intro;
+                continue;
+            }
+            if (readyClick || IsKeyPressed(KEY_R)) {
+                localReady = !localReady;
+                sendLobbyState();
+            }
+            if (netRole == NetRole::Host && (startClick || IsKeyPressed(KEY_ENTER)) &&
+                netHasPeer && localReady && remoteReady) {
+                onlineGameStarted = true;
+                screenState = ScreenState::Playing;
+#ifndef PLATFORM_ANDROID
+                DisableCursor();
+#endif
+            }
+            if (netRole == NetRole::Host && netSnapshotCooldown <= 0.0f) {
+                sendSnapshotToClient();
+                netSnapshotCooldown = 1.0f / 15.0f;
+            }
+
+            BeginDrawing();
+            DrawRectangleGradientV(0, 0, screenWidth, screenHeight,
+                                   {38, 72, 116, 255}, {16, 25, 44, 255});
+            DrawRectangleRounded(
+                {static_cast<float>(lobbyX), static_cast<float>(lobbyY),
+                 static_cast<float>(lobbyW), static_cast<float>(lobbyH)},
+                0.04f, 12, Fade({8, 14, 22, 255}, 0.94f));
+            DrawRectangleRoundedLines(
+                {static_cast<float>(lobbyX), static_cast<float>(lobbyY),
+                 static_cast<float>(lobbyW), static_cast<float>(lobbyH)},
+                0.04f, 12, SKYBLUE);
+            DrawText("Back", lobbyX + 38, lobbyY + 29, 22, RAYWHITE);
+            DrawCenteredTextLine("ONLINE LOBBY", screenWidth / 2, lobbyY + 30, 50, YELLOW);
+            DrawCenteredTextLine(netHasPeer ? "Player connected" : "Waiting for a player...",
+                                 screenWidth / 2, lobbyY + 105, 28,
+                                 netHasPeer ? LIME : ORANGE);
+
+            bool hostReady = (netRole == NetRole::Host) ? localReady : remoteReady;
+            bool clientReady = (netRole == NetRole::Host) ? remoteReady : localReady;
+            DrawText(TextFormat("Host  -  %s", hostReady ? "READY" : "NOT READY"),
+                     lobbyX + 90, lobbyY + 170, 28, hostReady ? LIME : RAYWHITE);
+            DrawText(TextFormat("Player 2  -  %s", clientReady ? "READY" : "NOT READY"),
+                     lobbyX + 90, lobbyY + 220, 28,
+                     clientReady ? LIME : RAYWHITE);
+            DrawCenteredTextLine(netHasPeer ? "Both players must ready up." : "Share the host IP and wait for the client.",
+                                 screenWidth / 2, lobbyY + 275, 20, Fade(RAYWHITE, 0.75f));
+
+            Color readyColor = localReady ? GREEN : SKYBLUE;
+            DrawRectangleRounded(readyRect, 0.2f, 8, Fade(readyColor, 0.35f));
+            DrawRectangleRoundedLines(readyRect, 0.2f, 8, readyColor);
+            DrawCenteredTextLine(localReady ? "UNREADY  (R)" : "READY UP  (R)",
+                                 screenWidth / 2, static_cast<int>(readyRect.y) + 16, 28, RAYWHITE);
+
+            if (netRole == NetRole::Host) {
+                bool canStart = netHasPeer && localReady && remoteReady;
+                DrawRectangleRounded(startRect, 0.2f, 8, Fade(canStart ? ORANGE : GRAY, 0.35f));
+                DrawRectangleRoundedLines(startRect, 0.2f, 8, canStart ? ORANGE : GRAY);
+                DrawCenteredTextLine(canStart ? "START GAME  (Enter)" : "START GAME (waiting for both ready)",
+                                     screenWidth / 2, static_cast<int>(startRect.y) + 16, 24,
+                                     canStart ? RAYWHITE : Fade(RAYWHITE, 0.55f));
+            } else {
+                DrawCenteredTextLine("Only the host can start the game.",
+                                     screenWidth / 2, static_cast<int>(startRect.y) + 18, 22,
+                                     Fade(RAYWHITE, 0.65f));
             }
             EndDrawing();
             continue;
