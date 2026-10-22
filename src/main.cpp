@@ -779,9 +779,9 @@ int main() {
     for (int i = 0; i < 20; ++i) {
         Cloud cloud{};
         cloud.pos = {
-            RandRange(-120.0f, 120.0f),
+            camera.position.x + RandRange(-120.0f, 120.0f),
             RandRange(22.0f, 38.0f),
-            RandRange(-120.0f, 120.0f)
+            camera.position.z + RandRange(-120.0f, 120.0f)
         };
         cloud.scale = RandRange(1.1f, 2.8f);
         cloud.speed = RandRange(0.6f, 2.0f);
@@ -2390,7 +2390,7 @@ int main() {
 
         for (auto& cloud : clouds) {
             cloud.pos.x += cloud.speed * dt;
-            if (cloud.pos.x > 140.0f) cloud.pos.x = -140.0f;
+            if (cloud.pos.x > 180.0f) cloud.pos.x = -180.0f;
         }
 
         if (paused && !dead) {
@@ -3295,9 +3295,8 @@ int main() {
                     if (playerHealth <= 0.0f) playerHealth = 100.0f;
                     if (coopHealth <= 0.0f) coopHealth = 100.0f;
                 }
-                // Give each completed wave a visible healing opportunity. In co-op,
-                // each player gets a separate pack so one player cannot consume both.
-                {
+                // Give each completed wave a 25% chance to spawn healing packs.
+                if (GetRandomValue(1, 4) == 1) {
                     MedPack mp{};
                     float ang = RandRange(0.0f, 2.0f * PI);
                     float dist = RandRange(5.0f, 15.0f);
@@ -3437,11 +3436,7 @@ int main() {
         DrawSphere(sunPos, 5.8f, Fade({255, 220, 120, 255}, 0.24f));
 
         for (const auto& cloud : clouds) {
-            Vector3 c = {
-                camera.position.x + cloud.pos.x,
-                cloud.pos.y,
-                camera.position.z + cloud.pos.z
-            };
+            Vector3 c = cloud.pos;
             Color cloudBright = ScaleColor(RAYWHITE, 0.85f + 0.25f * sunlight);
             cloudBright.a = 210;
             DrawSphere(c, 1.5f * cloud.scale, cloudBright);
@@ -3816,6 +3811,36 @@ int main() {
             if (netRole == NetRole::Host) {
                 DrawText(TextFormat("Share this LAN IP: %s", localIpAddress.c_str()), 36, 294, 22, LIME);
             }
+        }
+
+        const Chicken* activeBoss = nullptr;
+        for (const auto& chicken : chickens) {
+            if (chicken.bossTier > 0 && chicken.hp > 0.0f) {
+                activeBoss = &chicken;
+                break;
+            }
+        }
+        if (activeBoss != nullptr) {
+            float bossMaxHp = activeBoss->bossTier >= 2
+                                  ? 1400.0f + wave * 40.0f
+                                  : 600.0f + wave * 25.0f;
+            float bossRatio = Clamp(activeBoss->hp / bossMaxHp, 0.0f, 1.0f);
+            const int bossBarW = std::min(900, screenWidth - 120);
+            const int bossBarH = 28;
+            const int bossBarX = screenWidth / 2 - bossBarW / 2;
+            const int bossBarY = 22;
+            const char* bossName = activeBoss->bossTier >= 2 ? "BIG BOSS" : "MINI BOSS";
+            DrawCenteredTextLine(TextFormat("%s  %i / %i HP", bossName,
+                                            static_cast<int>(std::ceil(activeBoss->hp)),
+                                            static_cast<int>(bossMaxHp)),
+                                 screenWidth / 2, bossBarY + bossBarH + 8, 22, YELLOW);
+            DrawRectangle(bossBarX, bossBarY, bossBarW, bossBarH, Fade(BLACK, 0.72f));
+            DrawRectangle(bossBarX + 4, bossBarY + 4,
+                         static_cast<int>((bossBarW - 8) * bossRatio), bossBarH - 8,
+                         activeBoss->bossTier >= 2 ? RED : VIOLET);
+            DrawRectangleLinesEx({static_cast<float>(bossBarX), static_cast<float>(bossBarY),
+                                  static_cast<float>(bossBarW), static_cast<float>(bossBarH)},
+                                 3, activeBoss->bossTier >= 2 ? ORANGE : PINK);
         }
 
         // Weapon indicator (bottom right)
