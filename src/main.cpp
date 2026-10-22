@@ -66,6 +66,7 @@ struct Chicken {
     float wobble = 0.0f;
     float facingYaw = 0.0f;
     bool isBrown = false;
+    uint8_t bossTier = 0;
     float shootCooldown = 0.0f;
 };
 
@@ -180,10 +181,14 @@ constexpr uint8_t NET_HELLO = 1;
 constexpr uint8_t NET_INPUT = 2;
 constexpr uint8_t NET_SNAPSHOT = 3;
 constexpr uint8_t NET_DISCONNECT = 4;
+constexpr uint8_t NET_DISCOVER = 5;
+constexpr uint8_t NET_DISCOVER_REPLY = 6;
+constexpr uint8_t NET_SHOP_PURCHASE = 7;
 constexpr int NET_PORT = 42069;
 constexpr int MAX_SYNC_CHICKENS = 72;
 constexpr int MAX_SYNC_POTATOES = 96;
 constexpr int MAX_SYNC_ENEMY_POTATOES = 72;
+constexpr int MAX_SYNC_MED_PACKS = 16;
 
 struct NetVec3 {
     float x = 0.0f;
@@ -217,7 +222,8 @@ struct NetChickenSnapshot {
     float wobble = 0.0f;
     float facingYaw = 0.0f;
     uint8_t isBrown = 0;
-    uint8_t pad[3]{};
+    uint8_t bossTier = 0;
+    uint8_t pad[2]{};
 };
 
 struct NetPotatoSnapshot {
@@ -225,6 +231,24 @@ struct NetPotatoSnapshot {
     NetVec3 vel{};
     float life = 0.0f;
     float radius = 0.0f;
+};
+
+struct NetMedPackSnapshot {
+    NetVec3 pos{};
+    uint8_t active = 0;
+    uint8_t pad[3]{};
+};
+
+struct NetDiscoveryPacket {
+    NetHeader h{};
+    uint16_t port = NET_PORT;
+    uint16_t pad = 0;
+};
+
+struct NetShopPurchasePacket {
+    NetHeader h{};
+    uint8_t item = 0;
+    uint8_t pad[3]{};
 };
 
 struct NetSnapshotPacket {
@@ -253,10 +277,20 @@ struct NetSnapshotPacket {
     uint16_t pad1 = 0;
     int32_t waveTotalToSpawn = 0;
     int32_t waveSpawned = 0;
+    uint8_t shopOpen = 0;
+    uint8_t medPackCount = 0;
+    uint8_t inventoryOwnedMask = 0;
+    uint8_t hasShieldCharge = 0;
+    uint8_t ownsScythe = 0;
+    uint8_t pad2[3]{};
+    float shopTimer = 0.0f;
+    int32_t chickenNuggets = 0;
+    int32_t fireRateUpgradeCount = 0;
 
     NetChickenSnapshot chickens[MAX_SYNC_CHICKENS]{};
     NetPotatoSnapshot potatoes[MAX_SYNC_POTATOES]{};
     NetPotatoSnapshot enemyPotatoes[MAX_SYNC_ENEMY_POTATOES]{};
+    NetMedPackSnapshot medPacks[MAX_SYNC_MED_PACKS]{};
 };
 
 static NetVec3 ToNetVec3(Vector3 v) {
@@ -265,6 +299,49 @@ static NetVec3 ToNetVec3(Vector3 v) {
 
 static Vector3 FromNetVec3(NetVec3 v) {
     return {v.x, v.y, v.z};
+}
+
+static std::string GetLocalIpAddress() {
+#ifdef _WIN32
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s == INVALID_SOCKET) return "Unavailable";
+#else
+    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    if (s < 0) return "Unavailable";
+#endif
+
+    sockaddr_in remote{};
+    remote.sin_family = AF_INET;
+    remote.sin_port = htons(53);
+    inet_pton(AF_INET, "8.8.8.8", &remote.sin_addr);
+    if (connect(s, reinterpret_cast<const sockaddr*>(&remote), sizeof(remote)) != 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return "Unavailable";
+    }
+
+    sockaddr_in local{};
+    socklen_t localLen = sizeof(local);
+    if (getsockname(s, reinterpret_cast<sockaddr*>(&local), &localLen) != 0) {
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
+        return "Unavailable";
+    }
+
+    char address[INET_ADDRSTRLEN] = {};
+    const char* result = inet_ntop(AF_INET, &local.sin_addr, address, sizeof(address));
+#ifdef _WIN32
+    closesocket(s);
+#else
+    close(s);
+#endif
+    return result != nullptr ? address : "Unavailable";
 }
 
 static float RandRange(float a, float b) {
@@ -586,6 +663,8 @@ int main() {
     int waveSpawned = 0;
     int waveBrownToSpawn = 0;
     int waveBrownSpawned = 0;
+    int waveBossTier = 0;
+    int waveBossSpawned = 0;
     DeathCause deathCause = DeathCause::None;
     GameMode gameMode = GameMode::SinglePlayer;
     ScreenState screenState = ScreenState::Intro;
@@ -622,6 +701,14 @@ int main() {
     float onlineHostYaw = PI;
     bool netDisconnected = false;
     double netLastReceiveTime = 0.0;
+    std::string localIpAddress = GetLocalIpAddress();
+    std::vector<std::string> discoveredHosts;
+    double nextDiscoveryTime = 0.0;
+#ifdef _WIN32
+    SOCKET discoverySocket = INVALID_SOCKET;
+#else
+    int discoverySocket = -1;
+#endif
 
     float damageFlashTimer = 0.0f;
     Vector3 knockbackVel = {0.0f, 0.0f, 0.0f};
@@ -714,9 +801,33 @@ int main() {
         waveSpawned++;
     };
 
+    auto spawnBoss = [&](int tier) {
+        float ang = RandRange(0.0f, 2.0f * PI);
+        float dist = RandRange(22.0f, 34.0f);
+        Chicken boss{};
+        boss.pos = {
+            camera.position.x + std::cos(ang) * dist,
+            0.9f,
+            camera.position.z + std::sin(ang) * dist
+        };
+        boss.speed = tier >= 2 ? 1.65f : 2.0f;
+        boss.hp = tier >= 2 ? 1000.0f + wave * 30.0f : 350.0f + wave * 15.0f;
+        boss.radius = tier >= 2 ? 1.05f : 0.85f;
+        boss.wobble = RandRange(0.0f, 10.0f);
+        boss.facingYaw = ang + PI;
+        boss.isBrown = true;
+        boss.bossTier = static_cast<uint8_t>(tier);
+        boss.shootCooldown = 0.8f;
+        chickens.push_back(boss);
+        waveBossSpawned++;
+        waveSpawned++;
+    };
+
     auto startWave = [&](int newWave) {
         wave = newWave;
-        waveTotalToSpawn = 8 + (wave - 1) * 4;
+        waveBossTier = (wave % 25 == 0) ? 2 : ((wave % 10 == 0) ? 1 : 0);
+        waveBossSpawned = 0;
+        waveTotalToSpawn = 8 + (wave - 1) * 4 + (waveBossTier > 0 ? 1 : 0);
         waveBrownToSpawn = std::max(1, static_cast<int>(std::round(waveTotalToSpawn * 0.05f)));
         waveSpawned = 0;
         waveBrownSpawned = 0;
@@ -905,6 +1016,90 @@ int main() {
     };
 #endif
 
+    auto closeDiscoverySocket = [&]() {
+#ifdef _WIN32
+        if (discoverySocket != INVALID_SOCKET) {
+            closesocket(discoverySocket);
+            discoverySocket = INVALID_SOCKET;
+        }
+#else
+        if (discoverySocket >= 0) {
+            close(discoverySocket);
+            discoverySocket = -1;
+        }
+#endif
+    };
+
+    auto startDiscovery = [&]() {
+        closeDiscoverySocket();
+        discoverySocket = createUdpSocket();
+#ifdef _WIN32
+        if (discoverySocket == INVALID_SOCKET) return;
+        BOOL broadcast = TRUE;
+        setsockopt(discoverySocket, SOL_SOCKET, SO_BROADCAST,
+                   reinterpret_cast<const char*>(&broadcast), sizeof(broadcast));
+#else
+        if (discoverySocket < 0) return;
+        int broadcast = 1;
+        setsockopt(discoverySocket, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+#endif
+        sockaddr_in bindAddr{};
+        bindAddr.sin_family = AF_INET;
+        bindAddr.sin_port = 0;
+        bindAddr.sin_addr.s_addr = INADDR_ANY;
+        bind(discoverySocket, reinterpret_cast<sockaddr*>(&bindAddr), sizeof(bindAddr));
+    };
+
+    auto sendDiscovery = [&]() {
+#ifdef _WIN32
+        if (discoverySocket == INVALID_SOCKET) return;
+#else
+        if (discoverySocket < 0) return;
+#endif
+        NetDiscoveryPacket discovery{};
+        discovery.h.type = NET_DISCOVER;
+        sockaddr_in broadcastAddr{};
+        broadcastAddr.sin_family = AF_INET;
+        broadcastAddr.sin_port = htons(NET_PORT);
+        broadcastAddr.sin_addr.s_addr = INADDR_BROADCAST;
+#ifdef _WIN32
+        sendto(discoverySocket, reinterpret_cast<const char*>(&discovery), sizeof(discovery), 0,
+               reinterpret_cast<const sockaddr*>(&broadcastAddr), sizeof(broadcastAddr));
+#else
+        sendto(discoverySocket, &discovery, sizeof(discovery), 0,
+               reinterpret_cast<const sockaddr*>(&broadcastAddr), sizeof(broadcastAddr));
+#endif
+    };
+
+    auto pollDiscovery = [&]() {
+#ifdef _WIN32
+        if (discoverySocket == INVALID_SOCKET) return;
+#else
+        if (discoverySocket < 0) return;
+#endif
+        while (true) {
+            uint8_t buffer[256];
+            sockaddr_in from{};
+            socklen_t fromLen = sizeof(from);
+#ifdef _WIN32
+            int bytes = recvfrom(discoverySocket, reinterpret_cast<char*>(buffer), sizeof(buffer), 0,
+                                 reinterpret_cast<sockaddr*>(&from), &fromLen);
+#else
+            ssize_t bytes = recvfrom(discoverySocket, buffer, sizeof(buffer), 0,
+                                     reinterpret_cast<sockaddr*>(&from), &fromLen);
+#endif
+            if (bytes < static_cast<ssize_t>(sizeof(NetDiscoveryPacket))) break;
+            const NetDiscoveryPacket* reply = reinterpret_cast<const NetDiscoveryPacket*>(buffer);
+            if (reply->h.magic != NET_MAGIC || reply->h.type != NET_DISCOVER_REPLY) continue;
+            char address[INET_ADDRSTRLEN] = {};
+            if (inet_ntop(AF_INET, &from.sin_addr, address, sizeof(address)) == nullptr) continue;
+            std::string host = address;
+            if (std::find(discoveredHosts.begin(), discoveredHosts.end(), host) == discoveredHosts.end()) {
+                discoveredHosts.push_back(host);
+            }
+        }
+    };
+
     auto setupOnlineHost = [&]() -> bool {
         closeNetwork();
         netSocket = createUdpSocket();
@@ -978,6 +1173,26 @@ int main() {
 #endif
     };
 
+    auto applyShopPurchase = [&](uint8_t item) {
+        if (!shopOpen) return;
+        if (item == 0 && chickenNuggets >= 25) {
+            chickenNuggets -= 25;
+            fireRateUpgradeCount++;
+        } else if (item == 1 && !inventory[1].owned && chickenNuggets >= 50) {
+            chickenNuggets -= 50;
+            inventory[1].owned = true;
+        } else if (item == 2 && !inventory[2].owned && chickenNuggets >= 50) {
+            chickenNuggets -= 50;
+            inventory[2].owned = true;
+        } else if (item == 3 && !hasShieldCharge && !shieldActive && chickenNuggets >= 40) {
+            chickenNuggets -= 40;
+            hasShieldCharge = true;
+        } else if (item == 4 && !ownsScythe && chickenNuggets >= 75) {
+            chickenNuggets -= 75;
+            ownsScythe = true;
+        }
+    };
+
     auto recvNetworkPackets = [&]() {
 #ifdef _WIN32
         if (netSocket == INVALID_SOCKET) return;
@@ -1002,6 +1217,19 @@ int main() {
             const NetHeader* hdr = reinterpret_cast<const NetHeader*>(buffer);
             if (hdr->magic != NET_MAGIC) continue;
 
+            if (hdr->type == NET_DISCOVER) {
+                NetDiscoveryPacket reply{};
+                reply.h.type = NET_DISCOVER_REPLY;
+#ifdef _WIN32
+                sendto(netSocket, reinterpret_cast<const char*>(&reply), sizeof(reply), 0,
+                       reinterpret_cast<const sockaddr*>(&from), fromLen);
+#else
+                sendto(netSocket, &reply, sizeof(reply), 0,
+                       reinterpret_cast<const sockaddr*>(&from), fromLen);
+#endif
+                continue;
+            }
+
             if (netRole == NetRole::Host) {
                 if (hdr->type == NET_HELLO) {
                     netPeerAddr = from;
@@ -1023,6 +1251,9 @@ int main() {
                     remoteInput.shoot = (mask & (1 << 6)) != 0;
                     remoteInput.yaw = in->yaw;
                     remoteInput.pitch = in->pitch;
+                } else if (hdr->type == NET_SHOP_PURCHASE && bytes >= static_cast<ssize_t>(sizeof(NetShopPurchasePacket))) {
+                    const NetShopPurchasePacket* purchase = reinterpret_cast<const NetShopPurchasePacket*>(buffer);
+                    applyShopPurchase(purchase->item);
                 }
             } else if (netRole == NetRole::Client) {
                 if (hdr->type == NET_DISCONNECT) {
@@ -1053,6 +1284,23 @@ int main() {
 
                     waveTotalToSpawn = snap->waveTotalToSpawn;
                     waveSpawned = snap->waveSpawned;
+                    shopOpen = snap->shopOpen != 0;
+                    shopTimer = snap->shopTimer;
+                    chickenNuggets = snap->chickenNuggets;
+                    fireRateUpgradeCount = snap->fireRateUpgradeCount;
+                    hasShieldCharge = snap->hasShieldCharge != 0;
+                    ownsScythe = snap->ownsScythe != 0;
+                    for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
+                        inventory[i].owned = (snap->inventoryOwnedMask & (1u << i)) != 0;
+                    }
+                    medPacks.clear();
+                    medPacks.reserve(snap->medPackCount);
+                    for (int i = 0; i < snap->medPackCount; ++i) {
+                        MedPack mp{};
+                        mp.pos = FromNetVec3(snap->medPacks[i].pos);
+                        mp.active = snap->medPacks[i].active != 0;
+                        medPacks.push_back(mp);
+                    }
 
                     chickens.clear();
                     chickens.reserve(snap->chickenCount);
@@ -1063,6 +1311,7 @@ int main() {
                         c.wobble = snap->chickens[i].wobble;
                         c.facingYaw = snap->chickens[i].facingYaw;
                         c.isBrown = snap->chickens[i].isBrown != 0;
+                        c.bossTier = snap->chickens[i].bossTier;
                         c.radius = 0.55f;
                         chickens.push_back(c);
                     }
@@ -1094,6 +1343,24 @@ int main() {
                 }
             }
         }
+    };
+
+    auto sendShopPurchase = [&](uint8_t item) {
+#ifdef _WIN32
+        if (netRole != NetRole::Client || netSocket == INVALID_SOCKET || !netHasPeer) return;
+#else
+        if (netRole != NetRole::Client || netSocket < 0 || !netHasPeer) return;
+#endif
+        NetShopPurchasePacket purchase{};
+        purchase.h.type = NET_SHOP_PURCHASE;
+        purchase.item = item;
+#ifdef _WIN32
+        sendto(netSocket, reinterpret_cast<const char*>(&purchase), sizeof(purchase), 0,
+               reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#else
+        sendto(netSocket, &purchase, sizeof(purchase), 0,
+               reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
+#endif
     };
 
     auto sendInputToHost = [&](uint8_t moveMask) {
@@ -1143,6 +1410,15 @@ int main() {
         snap.coopYaw = coopYaw;
         snap.waveTotalToSpawn = waveTotalToSpawn;
         snap.waveSpawned = waveSpawned;
+        snap.shopOpen = shopOpen ? 1 : 0;
+        snap.shopTimer = shopTimer;
+        snap.chickenNuggets = chickenNuggets;
+        snap.fireRateUpgradeCount = fireRateUpgradeCount;
+        snap.hasShieldCharge = hasShieldCharge ? 1 : 0;
+        snap.ownsScythe = ownsScythe ? 1 : 0;
+        for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
+            if (inventory[i].owned) snap.inventoryOwnedMask |= static_cast<uint8_t>(1u << i);
+        }
 
         snap.chickenCount = static_cast<uint16_t>(std::min(static_cast<int>(chickens.size()), MAX_SYNC_CHICKENS));
         snap.potatoCount = static_cast<uint16_t>(std::min(static_cast<int>(potatoes.size()), MAX_SYNC_POTATOES));
@@ -1154,6 +1430,7 @@ int main() {
             snap.chickens[i].wobble = chickens[i].wobble;
             snap.chickens[i].facingYaw = chickens[i].facingYaw;
             snap.chickens[i].isBrown = chickens[i].isBrown ? 1 : 0;
+            snap.chickens[i].bossTier = chickens[i].bossTier;
         }
         for (int i = 0; i < snap.potatoCount; ++i) {
             snap.potatoes[i].pos = ToNetVec3(potatoes[i].pos);
@@ -1166,6 +1443,11 @@ int main() {
             snap.enemyPotatoes[i].vel = ToNetVec3(enemyPotatoes[i].vel);
             snap.enemyPotatoes[i].life = enemyPotatoes[i].life;
             snap.enemyPotatoes[i].radius = enemyPotatoes[i].radius;
+        }
+        snap.medPackCount = static_cast<uint8_t>(std::min(static_cast<int>(medPacks.size()), MAX_SYNC_MED_PACKS));
+        for (int i = 0; i < snap.medPackCount; ++i) {
+            snap.medPacks[i].pos = ToNetVec3(medPacks[i].pos);
+            snap.medPacks[i].active = medPacks[i].active ? 1 : 0;
         }
 
 #ifdef _WIN32
@@ -1716,6 +1998,9 @@ int main() {
                 screenState = ScreenState::OnlineSetup;
                 onlineSetupSelection = 0;
                 onlineIpFocused = true;
+                discoveredHosts.clear();
+                startDiscovery();
+                nextDiscoveryTime = 0.0;
                 continue;
             }
 
@@ -1761,6 +2046,12 @@ int main() {
             const int setupY = screenHeight / 2 - setupH / 2;
             const int centerX = setupX + setupW / 2;
 
+            pollDiscovery();
+            if (GetTime() >= nextDiscoveryTime) {
+                sendDiscovery();
+                nextDiscoveryTime = GetTime() + 1.0;
+            }
+
             float cardW = (setupW - 170.0f) / 2.0f;
             Rectangle hostRect = {static_cast<float>(setupX + 56), static_cast<float>(setupY + 166), cardW, 112.0f};
             Rectangle joinRect = {hostRect.x + cardW + 58.0f, static_cast<float>(setupY + 166), cardW, 112.0f};
@@ -1779,6 +2070,19 @@ int main() {
 
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 onlineIpFocused = ipHover;
+                for (size_t i = 0; i < discoveredHosts.size() && i < 3; ++i) {
+                    Rectangle hostIpRect = {
+                        static_cast<float>(setupX + 220),
+                        static_cast<float>(setupY + 398 + static_cast<int>(i) * 22),
+                        180.0f,
+                        24.0f
+                    };
+                    if (CheckCollisionPointRec(mousePos, hostIpRect)) {
+                        netJoinAddress = discoveredHosts[i];
+                        onlineIpFocused = false;
+                        onlineSetupSelection = 1;
+                    }
+                }
             }
 
             if (IsKeyPressed(KEY_TAB)) {
@@ -1810,6 +2114,7 @@ int main() {
             }
 
             auto startOnlineMode = [&](NetRole role) {
+                closeDiscoverySocket();
                 bool ok = (role == NetRole::Host) ? setupOnlineHost() : setupOnlineClient();
                 if (!ok) return;
 
@@ -1828,6 +2133,7 @@ int main() {
                 } else if (joinHover) {
                     startOnlineMode(NetRole::Client);
                 } else if (backHover) {
+                    closeDiscoverySocket();
                     screenState = ScreenState::Intro;
                     netStatus.clear();
                 }
@@ -1839,12 +2145,14 @@ int main() {
                 } else if (onlineSetupSelection == 1) {
                     startOnlineMode(NetRole::Client);
                 } else {
+                    closeDiscoverySocket();
                     screenState = ScreenState::Intro;
                     netStatus.clear();
                 }
             }
 
             if (IsKeyPressed(KEY_ESCAPE)) {
+                closeDiscoverySocket();
                 screenState = ScreenState::Intro;
                 netStatus.clear();
             }
@@ -1856,6 +2164,7 @@ int main() {
 
             DrawCenteredTextLine("ONLINE MULTIPLAYER", centerX, setupY + 24, 52, RAYWHITE);
             DrawCenteredTextLine("Choose host/join, then launch", centerX, setupY + 92, 24, Fade(RAYWHITE, 0.92f));
+            DrawCenteredTextLine(TextFormat("This device LAN IP: %s", localIpAddress.c_str()), centerX, setupY + 126, 22, LIME);
 
             DrawMenuCard(hostRect, "Host Game", "Create lobby and wait for player", onlineSetupSelection == 0, hostHover, {255, 224, 85, 255});
             DrawMenuCard(joinRect, "Join Game", "Connect to host IPv4 address", onlineSetupSelection == 1, joinHover, {173, 135, 255, 255});
@@ -1865,6 +2174,15 @@ int main() {
             DrawRectangleRoundedLines(ipRect, 0.12f, 8, onlineIpFocused ? YELLOW : Fade(RAYWHITE, 0.5f));
             DrawText(netJoinAddress.c_str(), static_cast<int>(ipRect.x) + 18, static_cast<int>(ipRect.y) + 15, 30, RAYWHITE);
             DrawText("Tip: click the field or press Tab to focus/unfocus", setupX + 62, setupY + 380, 20, Fade(RAYWHITE, 0.72f));
+            DrawText("LAN games found:", setupX + 62, setupY + 408, 18, Fade(RAYWHITE, 0.85f));
+            if (discoveredHosts.empty()) {
+                DrawText("Searching...", setupX + 235, setupY + 408, 18, Fade(RAYWHITE, 0.65f));
+            } else {
+                int hostX = setupX + 235;
+                for (size_t i = 0; i < discoveredHosts.size() && i < 3; ++i) {
+                    DrawText(discoveredHosts[i].c_str(), hostX, setupY + 408 + static_cast<int>(i) * 22, 18, SKYBLUE);
+                }
+            }
 
             DrawRectangleRounded(backRect, 0.24f, 8, (backHover || onlineSetupSelection == 2) ? Fade({220, 90, 90, 255}, 0.40f) : Fade({220, 90, 90, 255}, 0.22f));
             DrawRectangleRoundedLines(backRect, 0.24f, 8, (onlineSetupSelection == 2) ? ORANGE : Fade(RAYWHITE, 0.5f));
@@ -2659,9 +2977,15 @@ int main() {
 
             waveSpawnCooldown -= dt;
             if (waveSpawned < waveTotalToSpawn && waveSpawnCooldown <= 0.0f) {
+                if (waveBossTier > 0 && waveBossSpawned == 0) {
+                    spawnBoss(waveBossTier);
+                }
                 int remaining = waveTotalToSpawn - waveSpawned;
                 int batchSize = std::max(2, std::min(5, 2 + wave / 2));
                 int spawnNow = std::min(remaining, batchSize);
+                if (waveBossTier > 0 && waveBossSpawned > 0) {
+                    spawnNow = std::min(spawnNow, std::max(0, batchSize - 1));
+                }
                 for (int i = 0; i < spawnNow; ++i) {
                     spawnChicken(18.0f, 42.0f);
                 }
@@ -2750,7 +3074,7 @@ int main() {
                     float hitDist = c.radius + p.radius;
                     if (Vector3Distance(c.pos, p.pos) < hitDist) {
                         p.life = 0.0f;
-                        c.hp -= 22.0f;
+                        c.hp -= c.bossTier >= 2 ? 14.0f : (c.bossTier == 1 ? 18.0f : 22.0f);
                     }
                 }
             }
@@ -3041,8 +3365,8 @@ int main() {
             float footLiftL = std::max(0.0f, step) * 0.06f;
             float footLiftR = std::max(0.0f, -step) * 0.06f;
 
-            Color baseFeatherColor = c.isBrown ? BROWN : WHITE;
-            Color accentFeatherColor = c.isBrown ? DARKBROWN : RAYWHITE;
+            Color baseFeatherColor = c.bossTier >= 2 ? MAROON : (c.bossTier == 1 ? PURPLE : (c.isBrown ? BROWN : WHITE));
+            Color accentFeatherColor = c.bossTier >= 2 ? DARKPURPLE : (c.bossTier == 1 ? DARKPURPLE : (c.isBrown ? DARKBROWN : RAYWHITE));
 
             Color bodyColor = ScaleColor(baseFeatherColor, 1.05f * bodyLight);
             Color chestColor = ScaleColor(accentFeatherColor, 0.95f * bodyLight);
@@ -3093,7 +3417,9 @@ int main() {
                 DrawCylinderEx(cannonBase, cannonTip, 0.055f, 0.045f, 10, ScaleColor(DARKGRAY, 0.9f + 0.3f * bodyLight));
             }
 
-            float hpRatio = c.hp / (20.0f + wave * 4.0f);
+            float maxChickenHp = c.bossTier >= 2 ? 1000.0f + wave * 30.0f
+                                                  : (c.bossTier == 1 ? 350.0f + wave * 15.0f : 20.0f + wave * 4.0f);
+            float hpRatio = c.hp / maxChickenHp;
             hpRatio = Clamp(hpRatio, 0.0f, 1.0f);
 
             // Billboard HP bar facing camera
@@ -3276,6 +3602,13 @@ int main() {
         DrawText(TextFormat("Score: %i", score), 36, 67, 26, YELLOW);
         DrawText(TextFormat("Wave: %i", wave), 36, 96, 26, SKYBLUE);
         DrawText(TextFormat("Nuggets: %i", chickenNuggets), 36, 126, 24, {255, 180, 50, 255});
+        for (const auto& chicken : chickens) {
+            if (chicken.bossTier > 0) {
+                DrawText(chicken.bossTier >= 2 ? "BIG BOSS ACTIVE" : "MINI BOSS ACTIVE",
+                         380, 96, 26, chicken.bossTier >= 2 ? RED : VIOLET);
+                break;
+            }
+        }
 
         {
             int chickensRemaining;
@@ -3296,6 +3629,9 @@ int main() {
         if (gameMode == GameMode::Online) {
             DrawRectangle(20, 256, 520, 36, Fade(BLACK, 0.45f));
             DrawText(TextFormat("Online: %s", netStatus.empty() ? "Starting..." : netStatus.c_str()), 36, 264, 22, YELLOW);
+            if (netRole == NetRole::Host) {
+                DrawText(TextFormat("Share this LAN IP: %s", localIpAddress.c_str()), 36, 294, 22, LIME);
+            }
         }
 
         // Weapon indicator (bottom right)
@@ -3377,6 +3713,11 @@ int main() {
             Rectangle scytheBtn = {static_cast<float>(shopX + 30), static_cast<float>(shopY + 390), static_cast<float>(shopW - 60), 50.0f};
 
             Vector2 mp = GetMousePosition();
+#ifdef PLATFORM_ANDROID
+            if (GetTouchPointCount() > 0) {
+                mp = GetTouchPosition(0);
+            }
+#endif
             bool fireRateHover = CheckCollisionPointRec(mp, fireRateBtn);
             bool shotgunHover = CheckCollisionPointRec(mp, shotgunBtn);
             bool grenadeHover = CheckCollisionPointRec(mp, grenadeBtn);
@@ -3423,26 +3764,33 @@ int main() {
             DrawText(ownsScythe ? "Potato Scythe [OWNED]" : "Potato Scythe [75 nuggets]", shopX + 42, shopY + 402, 22, (ownsScythe || canBuyScythe) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
 
             // Handle purchases
-            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+            bool shopClick = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+#ifdef PLATFORM_ANDROID
+            static bool shopTouchWasDown = false;
+            bool shopTouchDown = GetTouchPointCount() > 0;
+            shopClick = shopClick || (shopTouchDown && !shopTouchWasDown);
+            shopTouchWasDown = shopTouchDown;
+#endif
+            if (shopClick) {
                 if (fireRateHover && canBuyFireRate) {
-                    chickenNuggets -= 25;
-                    fireRateUpgradeCount++;
+                    if (netRole == NetRole::Client) sendShopPurchase(0);
+                    else applyShopPurchase(0);
                 }
                 if (shotgunHover && canBuyShotgun) {
-                    chickenNuggets -= 50;
-                    inventory[1].owned = true;
+                    if (netRole == NetRole::Client) sendShopPurchase(1);
+                    else applyShopPurchase(1);
                 }
                 if (grenadeHover && canBuyGrenade) {
-                    chickenNuggets -= 50;
-                    inventory[2].owned = true;
+                    if (netRole == NetRole::Client) sendShopPurchase(2);
+                    else applyShopPurchase(2);
                 }
                 if (shieldHover && canBuyShield) {
-                    chickenNuggets -= 40;
-                    hasShieldCharge = true;
+                    if (netRole == NetRole::Client) sendShopPurchase(3);
+                    else applyShopPurchase(3);
                 }
                 if (scytheHover && canBuyScythe) {
-                    chickenNuggets -= 75;
-                    ownsScythe = true;
+                    if (netRole == NetRole::Client) sendShopPurchase(4);
+                    else applyShopPurchase(4);
                 }
             }
 
@@ -3622,6 +3970,7 @@ int main() {
         EndDrawing();
     }
 
+    closeDiscoverySocket();
     closeNetwork();
     CloseWindow();
 

@@ -10,6 +10,9 @@ A small 3D first-person survival shooter where you fight off hordes of angry chi
 - Wave-based difficulty scaling
 - Local co-op mode
 - Online multiplayer mode (host/join by IP, LAN/port-forward)
+- LAN game discovery from the online setup screen
+- Host LAN IP shown in the setup screen and online HUD
+- Mini-bosses every 10th wave and big bosses every 25th wave
 - Health, score, wave UI
 - Restart on death
 
@@ -85,4 +88,9 @@ cmake --build build
 - `Co-op` (local second player): `I J K L` move, `Right Shift` shoot, `Right Ctrl` sprint
 - `Online Multiplayer`: choose `Host Game` or `Join Game` and enter host IPv4 (default `127.0.0.1`)
 
-Online mode uses UDP port `42069`.
+Online mode uses UDP port `42069`. On the online setup screen, LAN hosts are
+discovered automatically; you can tap/click a discovered address to fill the
+join field. Hosts should share the displayed LAN IP with players when
+discovery is blocked by the network. Discovery uses UDP broadcast, so both
+devices must be on the same Wi-Fi/LAN and the network must allow client
+isolation-free local traffic.
