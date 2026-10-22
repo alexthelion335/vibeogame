@@ -572,9 +572,9 @@ int main() {
     const int initialScreenHeight = 900;
     int screenWidth = initialScreenWidth;
     int screenHeight = initialScreenHeight;
-    int targetFps = 120;
+    int targetFps = 60;
     bool vsyncEnabled = false;
-    bool showFpsCounter = true;
+    bool showFpsCounter = false;
 
 #ifdef PLATFORM_ANDROID
     // On Android, start with fullscreen at native resolution
@@ -592,7 +592,6 @@ int main() {
     float dpiScale = 1.0f;
 #endif
 
-    SetTargetFPS(targetFps);
     SetExitKey(KEY_NULL);
 
     // Touch controls for mobile
@@ -662,10 +661,16 @@ int main() {
     SetWindowSize(monitorWidth, monitorHeight);
     ToggleFullscreen();
     SetWindowMonitor(selectedMonitor);
+    const int monitorRefreshRate = GetMonitorRefreshRate(selectedMonitor);
+    if (monitorRefreshRate > 0) {
+        targetFps = monitorRefreshRate;
+    }
 #else
     // Android is already fullscreen via NativeActivity window handling.
     fullscreen = true;
 #endif
+
+    SetTargetFPS(targetFps);
 
     std::vector<Potato> potatoes;
     std::vector<EnemyPotato> enemyPotatoes;
@@ -1166,6 +1171,11 @@ int main() {
         const int monitorCount = GetMonitorCount();
         if (monitorCount <= 0) return;
         selectedMonitor = (newMonitor % monitorCount + monitorCount) % monitorCount;
+        const int refreshRate = GetMonitorRefreshRate(selectedMonitor);
+        if (refreshRate > 0) {
+            targetFps = refreshRate;
+            SetTargetFPS(targetFps);
+        }
 
         if (fullscreen) {
             SetWindowMonitor(selectedMonitor);
