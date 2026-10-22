@@ -572,6 +572,9 @@ int main() {
     const int initialScreenHeight = 900;
     int screenWidth = initialScreenWidth;
     int screenHeight = initialScreenHeight;
+    int targetFps = 120;
+    bool vsyncEnabled = false;
+    bool showFpsCounter = true;
 
 #ifdef PLATFORM_ANDROID
     // On Android, start with fullscreen at native resolution
@@ -589,7 +592,7 @@ int main() {
     float dpiScale = 1.0f;
 #endif
 
-    SetTargetFPS(120);
+    SetTargetFPS(targetFps);
     SetExitKey(KEY_NULL);
 
     // Touch controls for mobile
@@ -634,6 +637,7 @@ int main() {
         {1920, 1080},
         {2560, 1440}
     };
+    const std::vector<int> targetFpsOptions = {30, 60, 90, 120, 144, 165, 240};
     int currentResolutionIndex = 7;
     int pauseSelection = 0;
 
@@ -950,10 +954,13 @@ int main() {
         const int targetH = static_cast<int>(resolutionOptions[currentResolutionIndex].y);
         if (!fullscreen) {
             SetWindowSize(targetW, targetH);
+            windowedWidth = targetW;
+            windowedHeight = targetH;
         } else {
-            ToggleFullscreen();
-            SetWindowSize(targetW, targetH);
-            ToggleFullscreen();
+            // Fullscreen is borderless on the selected monitor; resolution applies
+            // when returning to windowed mode.
+            windowedWidth = targetW;
+            windowedHeight = targetH;
         }
 #endif
     };
@@ -965,8 +972,6 @@ int main() {
         if (!fullscreen) {
             windowedWidth = GetScreenWidth();
             windowedHeight = GetScreenHeight();
-            SetWindowSize(static_cast<int>(resolutionOptions[currentResolutionIndex].x),
-                          static_cast<int>(resolutionOptions[currentResolutionIndex].y));
             ToggleFullscreen();
             fullscreen = true;
             SetWindowMonitor(selectedMonitor);
@@ -980,6 +985,34 @@ int main() {
             SetWindowPosition(
                 static_cast<int>(monitorPosition.x) + (monitorWidth - windowedWidth) / 2,
                 static_cast<int>(monitorPosition.y) + (monitorHeight - windowedHeight) / 2);
+        }
+#endif
+    };
+
+    auto applyTargetFps = [&](int newTargetFps) {
+        constexpr int minTargetFps = 30;
+        constexpr int maxTargetFps = 240;
+        targetFps = std::clamp(newTargetFps, minTargetFps, maxTargetFps);
+        SetTargetFPS(targetFps);
+    };
+
+    auto toggleVsync = [&]() {
+        vsyncEnabled = !vsyncEnabled;
+        if (vsyncEnabled) {
+            SetWindowState(FLAG_VSYNC_HINT);
+        } else {
+            ClearWindowState(FLAG_VSYNC_HINT);
+        }
+    };
+
+    auto refreshDisplayMetrics = [&]() {
+        screenWidth = GetScreenWidth();
+        screenHeight = GetScreenHeight();
+#ifndef PLATFORM_ANDROID
+        fullscreen = IsWindowFullscreen();
+        if (!fullscreen) {
+            windowedWidth = screenWidth;
+            windowedHeight = screenHeight;
         }
 #endif
     };
@@ -1883,6 +1916,8 @@ int main() {
     startWave(1);
 
     while (!shouldExit) {
+        refreshDisplayMetrics();
+
         if (WindowShouldClose()) {
             if (screenState == ScreenState::Playing && dead) {
                 closeNetwork();
@@ -2135,7 +2170,7 @@ int main() {
             }
 
             const int settingsW = 700;
-            const int settingsH = 440;
+            const int settingsH = 620;
             const int settingsX = screenWidth / 2 - settingsW / 2;
             const int settingsY = screenHeight / 2 - settingsH / 2;
             Rectangle backRect = {
@@ -2155,10 +2190,24 @@ int main() {
                 static_cast<float>(settingsX + 54), static_cast<float>(settingsY + 236),
                 592.0f, 44.0f
             };
+            Rectangle targetFpsRect = {
+                static_cast<float>(settingsX + 54), static_cast<float>(settingsY + 294),
+                592.0f, 44.0f
+            };
+            Rectangle vsyncRect = {
+                static_cast<float>(settingsX + 54), static_cast<float>(settingsY + 352),
+                592.0f, 44.0f
+            };
+            Rectangle fpsCounterRect = {
+                static_cast<float>(settingsX + 54), static_cast<float>(settingsY + 410),
+                592.0f, 44.0f
+            };
             Rectangle resLeftRect = {static_cast<float>(settingsX + 560), static_cast<float>(settingsY + 126), 30.0f, 32.0f};
             Rectangle resRightRect = {static_cast<float>(settingsX + 606), static_cast<float>(settingsY + 126), 30.0f, 32.0f};
             Rectangle monitorLeftRect = {static_cast<float>(settingsX + 560), static_cast<float>(settingsY + 242), 30.0f, 32.0f};
             Rectangle monitorRightRect = {static_cast<float>(settingsX + 606), static_cast<float>(settingsY + 242), 30.0f, 32.0f};
+            Rectangle targetFpsLeftRect = {static_cast<float>(settingsX + 560), static_cast<float>(settingsY + 300), 30.0f, 32.0f};
+            Rectangle targetFpsRightRect = {static_cast<float>(settingsX + 606), static_cast<float>(settingsY + 300), 30.0f, 32.0f};
 
             Vector2 settingsMouse = GetMousePosition();
             bool backHover = CheckCollisionPointRec(settingsMouse, backRect);
@@ -2184,6 +2233,21 @@ int main() {
                            CheckCollisionPointRec(settingsMouse, monitorRect)) {
                     applyMonitorIndex(selectedMonitor + 1);
 #endif
+                } else if (CheckCollisionPointRec(settingsMouse, targetFpsLeftRect)) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    index = (index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size());
+                    applyTargetFps(targetFpsOptions[index]);
+                } else if (CheckCollisionPointRec(settingsMouse, targetFpsRightRect) ||
+                           CheckCollisionPointRec(settingsMouse, targetFpsRect)) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    index = (index + 1) % static_cast<int>(targetFpsOptions.size());
+                    applyTargetFps(targetFpsOptions[index]);
+                } else if (CheckCollisionPointRec(settingsMouse, vsyncRect)) {
+                    toggleVsync();
+                } else if (CheckCollisionPointRec(settingsMouse, fpsCounterRect)) {
+                    showFpsCounter = !showFpsCounter;
                 }
             }
 
@@ -2193,6 +2257,17 @@ int main() {
             }
             if (IsKeyPressed(KEY_RIGHT)) {
                 applyResolutionIndex(currentResolutionIndex + 1);
+            }
+            if (IsKeyPressed(KEY_UP)) {
+                auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                applyTargetFps(targetFpsOptions[(index + 1) % static_cast<int>(targetFpsOptions.size())]);
+            }
+            if (IsKeyPressed(KEY_DOWN)) {
+                auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                index = (index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size());
+                applyTargetFps(targetFpsOptions[index]);
             }
 #endif
 
@@ -2225,6 +2300,13 @@ int main() {
             DrawText("<", settingsX + 568, settingsY + 246, 28, YELLOW);
             DrawText(">", settingsX + 614, settingsY + 246, 28, YELLOW);
 #endif
+            DrawText(TextFormat("Target FPS: %i", targetFps), settingsX + 78, settingsY + 302, 28, RAYWHITE);
+            DrawText("<", settingsX + 568, settingsY + 304, 28, YELLOW);
+            DrawText(">", settingsX + 614, settingsY + 304, 28, YELLOW);
+            DrawText(TextFormat("VSync: %s", vsyncEnabled ? "On" : "Off"),
+                     settingsX + 78, settingsY + 360, 28, RAYWHITE);
+            DrawText(TextFormat("FPS Counter: %s", showFpsCounter ? "On" : "Off"),
+                     settingsX + 78, settingsY + 418, 28, RAYWHITE);
             DrawRectangleRounded(backRect, 0.2f, 8, backHover ? Fade(ORANGE, 0.45f) : Fade(ORANGE, 0.28f));
             DrawRectangleRoundedLines(backRect, 0.2f, 8, RAYWHITE);
             DrawCenteredTextLine("Back", static_cast<int>(backRect.x + backRect.width / 2),
@@ -4356,6 +4438,13 @@ int main() {
 
             DrawText("Mouse: Click items   Arrows change resolution/monitor", panelX + 70, panelY + 336, 18, LIGHTGRAY);
             DrawText("UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 354, 18, LIGHTGRAY);
+        }
+
+        if (showFpsCounter) {
+            const char* fpsText = TextFormat("FPS: %i", GetFPS());
+            const int fpsWidth = MeasureText(fpsText, 20);
+            DrawRectangle(12, 12, fpsWidth + 16, 30, Fade(BLACK, 0.55f));
+            DrawText(fpsText, 20, 17, 20, LIME);
         }
 
         EndDrawing();
