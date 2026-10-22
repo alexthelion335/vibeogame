@@ -641,7 +641,10 @@ int main() {
     int pauseSelection = 0;
 
 #ifndef PLATFORM_ANDROID
-    int selectedMonitor = GetCurrentMonitor();
+    // Raylib follows GLFW's monitor ordering, where the primary monitor is index 0.
+    // Do not use GetCurrentMonitor() here: the newly created window may initially
+    // be placed on a different monitor by the window manager.
+    int selectedMonitor = 0;
     const int monitorWidth = GetMonitorWidth(selectedMonitor);
     const int monitorHeight = GetMonitorHeight(selectedMonitor);
 
@@ -659,6 +662,7 @@ int main() {
     currentResolutionIndex = bestResolutionIndex;
 
     SetWindowSize(monitorWidth, monitorHeight);
+    SetWindowMonitor(selectedMonitor);
     ToggleFullscreen();
     SetWindowMonitor(selectedMonitor);
     const int monitorRefreshRate = GetMonitorRefreshRate(selectedMonitor);
@@ -2001,7 +2005,7 @@ int main() {
         }
 
         const int panelW = 560;
-        const int panelH = 380;
+        const int panelH = 520;
         const int panelX = screenWidth / 2 - panelW / 2;
         const int panelY = screenHeight / 2 - panelH / 2;
 
@@ -2009,12 +2013,17 @@ int main() {
         Rectangle resolutionRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 146), 420.0f, 40.0f};
         Rectangle displayModeRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 196), 420.0f, 40.0f};
         Rectangle monitorRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 246), 420.0f, 40.0f};
-        Rectangle quitRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 296), 420.0f, 40.0f};
+        Rectangle targetFpsRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 296), 420.0f, 40.0f};
+        Rectangle vsyncRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 346), 420.0f, 40.0f};
+        Rectangle fpsCounterRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 396), 420.0f, 40.0f};
+        Rectangle quitRect = {static_cast<float>(panelX + 62), static_cast<float>(panelY + 446), 420.0f, 40.0f};
 
         Rectangle resLeftRect = {static_cast<float>(panelX + 440), static_cast<float>(panelY + 148), 26.0f, 32.0f};
         Rectangle resRightRect = {static_cast<float>(panelX + 474), static_cast<float>(panelY + 148), 26.0f, 32.0f};
         Rectangle monitorLeftRect = {static_cast<float>(panelX + 440), static_cast<float>(panelY + 248), 26.0f, 32.0f};
         Rectangle monitorRightRect = {static_cast<float>(panelX + 474), static_cast<float>(panelY + 248), 26.0f, 32.0f};
+        Rectangle targetFpsLeftRect = {static_cast<float>(panelX + 440), static_cast<float>(panelY + 298), 26.0f, 32.0f};
+        Rectangle targetFpsRightRect = {static_cast<float>(panelX + 474), static_cast<float>(panelY + 298), 26.0f, 32.0f};
 
         if (screenState == ScreenState::Intro) {
             if (IsCursorHidden()) {
@@ -2635,15 +2644,27 @@ int main() {
 
         if (paused && !dead) {
             if (IsKeyPressed(KEY_UP)) {
-                pauseSelection = (pauseSelection + 4) % 5;
+                pauseSelection = (pauseSelection + 7) % 8;
             }
             if (IsKeyPressed(KEY_DOWN)) {
-                pauseSelection = (pauseSelection + 1) % 5;
+                pauseSelection = (pauseSelection + 1) % 8;
             }
 
             if (pauseSelection == 1) {
                 if (IsKeyPressed(KEY_LEFT)) {
                     applyResolutionIndex(currentResolutionIndex - 1);
+                }
+                if (pauseSelection == 4) {
+                    if (IsKeyPressed(KEY_LEFT)) {
+                        auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                        int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                        applyTargetFps(targetFpsOptions[(index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size())]);
+                    }
+                    if (IsKeyPressed(KEY_RIGHT)) {
+                        auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                        int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                        applyTargetFps(targetFpsOptions[(index + 1) % static_cast<int>(targetFpsOptions.size())]);
+                    }
                 }
                 if (IsKeyPressed(KEY_RIGHT)) {
                     applyResolutionIndex(currentResolutionIndex + 1);
@@ -2665,7 +2686,10 @@ int main() {
             else if (CheckCollisionPointRec(mousePos, resolutionRect)) pauseSelection = 1;
             else if (CheckCollisionPointRec(mousePos, displayModeRect)) pauseSelection = 2;
             else if (CheckCollisionPointRec(mousePos, monitorRect)) pauseSelection = 3;
-            else if (CheckCollisionPointRec(mousePos, quitRect)) pauseSelection = 4;
+            else if (CheckCollisionPointRec(mousePos, targetFpsRect)) pauseSelection = 4;
+            else if (CheckCollisionPointRec(mousePos, vsyncRect)) pauseSelection = 5;
+            else if (CheckCollisionPointRec(mousePos, fpsCounterRect)) pauseSelection = 6;
+            else if (CheckCollisionPointRec(mousePos, quitRect)) pauseSelection = 7;
 
             auto triggerPauseAction = [&](int action) {
                 if (action == 0) {
@@ -2682,6 +2706,14 @@ int main() {
                     applyMonitorIndex(selectedMonitor + 1);
 #endif
                 } else if (action == 4) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    applyTargetFps(targetFpsOptions[(index + 1) % static_cast<int>(targetFpsOptions.size())]);
+                } else if (action == 5) {
+                    toggleVsync();
+                } else if (action == 6) {
+                    showFpsCounter = !showFpsCounter;
+                } else if (action == 7) {
                     shouldExit = true;
                 }
             };
@@ -2707,8 +2739,20 @@ int main() {
 #endif
                 } else if (CheckCollisionPointRec(mousePos, monitorRect)) {
                     triggerPauseAction(3);
-                } else if (CheckCollisionPointRec(mousePos, quitRect)) {
+                } else if (CheckCollisionPointRec(mousePos, targetFpsLeftRect)) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    applyTargetFps(targetFpsOptions[(index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size())]);
+                } else if (CheckCollisionPointRec(mousePos, targetFpsRightRect)) {
                     triggerPauseAction(4);
+                } else if (CheckCollisionPointRec(mousePos, targetFpsRect)) {
+                    triggerPauseAction(4);
+                } else if (CheckCollisionPointRec(mousePos, vsyncRect)) {
+                    triggerPauseAction(5);
+                } else if (CheckCollisionPointRec(mousePos, fpsCounterRect)) {
+                    triggerPauseAction(6);
+                } else if (CheckCollisionPointRec(mousePos, quitRect)) {
+                    triggerPauseAction(7);
                 }
             }
 
@@ -4429,7 +4473,10 @@ int main() {
             Color resColor = (pauseSelection == 1) ? YELLOW : RAYWHITE;
             Color displayModeColor = (pauseSelection == 2) ? YELLOW : RAYWHITE;
             Color monitorColor = (pauseSelection == 3) ? YELLOW : RAYWHITE;
-            Color quitColor = (pauseSelection == 4) ? YELLOW : RAYWHITE;
+            Color targetFpsColor = (pauseSelection == 4) ? YELLOW : RAYWHITE;
+            Color vsyncColor = (pauseSelection == 5) ? YELLOW : RAYWHITE;
+            Color fpsCounterColor = (pauseSelection == 6) ? YELLOW : RAYWHITE;
+            Color quitColor = (pauseSelection == 7) ? YELLOW : RAYWHITE;
 
             DrawText("Resume", panelX + 70, panelY + 100, 34, resumeColor);
             DrawText(TextFormat("Resolution: %ix%i", static_cast<int>(resolutionOptions[currentResolutionIndex].x), static_cast<int>(resolutionOptions[currentResolutionIndex].y)), panelX + 70, panelY + 152, 30, resColor);
@@ -4444,10 +4491,15 @@ int main() {
             DrawText("<", panelX + 444, panelY + 252, 30, monitorColor);
             DrawText(">", panelX + 478, panelY + 252, 30, monitorColor);
  #endif
-            DrawText("Quit Game", panelX + 70, panelY + 302, 34, quitColor);
+            DrawText(TextFormat("Target FPS: %i", targetFps), panelX + 70, panelY + 302, 30, targetFpsColor);
+            DrawText("<", panelX + 444, panelY + 302, 30, targetFpsColor);
+            DrawText(">", panelX + 478, panelY + 302, 30, targetFpsColor);
+            DrawText(TextFormat("VSync: %s", vsyncEnabled ? "On" : "Off"), panelX + 70, panelY + 352, 30, vsyncColor);
+            DrawText(TextFormat("FPS Counter: %s", showFpsCounter ? "On" : "Off"), panelX + 70, panelY + 402, 30, fpsCounterColor);
+            DrawText("Quit Game", panelX + 70, panelY + 452, 34, quitColor);
 
-            DrawText("Mouse: Click items   Arrows change resolution/monitor", panelX + 70, panelY + 336, 18, LIGHTGRAY);
-            DrawText("UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 354, 18, LIGHTGRAY);
+            DrawText("Mouse: Click items   Arrows change settings", panelX + 70, panelY + 482, 18, LIGHTGRAY);
+            DrawText("UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 500, 18, LIGHTGRAY);
         }
 
         if (showFpsCounter) {
