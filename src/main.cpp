@@ -636,7 +636,7 @@ int main() {
         {1920, 1080},
         {2560, 1440}
     };
-    const std::vector<int> targetFpsOptions = {30, 60, 90, 120, 144, 165, 240};
+    const std::vector<int> targetFpsOptions = {0, 30, 60, 90, 120, 144, 165, 240};
     int currentResolutionIndex = 7;
     int pauseSelection = 0;
 
@@ -1001,8 +1001,14 @@ int main() {
     auto applyTargetFps = [&](int newTargetFps) {
         constexpr int minTargetFps = 30;
         constexpr int maxTargetFps = 240;
-        targetFps = std::clamp(newTargetFps, minTargetFps, maxTargetFps);
+        targetFps = (newTargetFps == 0)
+                        ? 0
+                        : std::clamp(newTargetFps, minTargetFps, maxTargetFps);
         SetTargetFPS(targetFps);
+    };
+
+    auto targetFpsLabel = [&](int fps) -> const char* {
+        return fps == 0 ? "Unlocked" : TextFormat("%i", fps);
     };
 
     auto toggleVsync = [&]() {
@@ -2319,7 +2325,7 @@ int main() {
             DrawText("<", settingsX + 568, settingsY + 246, 28, YELLOW);
             DrawText(">", settingsX + 614, settingsY + 246, 28, YELLOW);
 #endif
-            DrawText(TextFormat("Target FPS: %i", targetFps), settingsX + 78, settingsY + 302, 28, RAYWHITE);
+            DrawText(TextFormat("Target FPS: %s", targetFpsLabel(targetFps)), settingsX + 78, settingsY + 302, 28, RAYWHITE);
             DrawText("<", settingsX + 568, settingsY + 304, 28, YELLOW);
             DrawText(">", settingsX + 614, settingsY + 304, 28, YELLOW);
             DrawText(TextFormat("VSync: %s", vsyncEnabled ? "On" : "Off"),
@@ -2654,20 +2660,20 @@ int main() {
                 if (IsKeyPressed(KEY_LEFT)) {
                     applyResolutionIndex(currentResolutionIndex - 1);
                 }
-                if (pauseSelection == 4) {
-                    if (IsKeyPressed(KEY_LEFT)) {
-                        auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
-                        int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
-                        applyTargetFps(targetFpsOptions[(index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size())]);
-                    }
-                    if (IsKeyPressed(KEY_RIGHT)) {
-                        auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
-                        int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
-                        applyTargetFps(targetFpsOptions[(index + 1) % static_cast<int>(targetFpsOptions.size())]);
-                    }
-                }
                 if (IsKeyPressed(KEY_RIGHT)) {
                     applyResolutionIndex(currentResolutionIndex + 1);
+                }
+            }
+            if (pauseSelection == 4) {
+                if (IsKeyPressed(KEY_LEFT)) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    applyTargetFps(targetFpsOptions[(index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size())]);
+                }
+                if (IsKeyPressed(KEY_RIGHT)) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    applyTargetFps(targetFpsOptions[(index + 1) % static_cast<int>(targetFpsOptions.size())]);
                 }
             }
 #ifndef PLATFORM_ANDROID
@@ -4491,7 +4497,7 @@ int main() {
             DrawText("<", panelX + 444, panelY + 252, 30, monitorColor);
             DrawText(">", panelX + 478, panelY + 252, 30, monitorColor);
  #endif
-            DrawText(TextFormat("Target FPS: %i", targetFps), panelX + 70, panelY + 302, 30, targetFpsColor);
+            DrawText(TextFormat("Target FPS: %s", targetFpsLabel(targetFps)), panelX + 70, panelY + 302, 30, targetFpsColor);
             DrawText("<", panelX + 444, panelY + 302, 30, targetFpsColor);
             DrawText(">", panelX + 478, panelY + 302, 30, targetFpsColor);
             DrawText(TextFormat("VSync: %s", vsyncEnabled ? "On" : "Off"), panelX + 70, panelY + 352, 30, vsyncColor);
@@ -4505,8 +4511,9 @@ int main() {
         if (showFpsCounter) {
             const char* fpsText = TextFormat("FPS: %i", GetFPS());
             const int fpsWidth = MeasureText(fpsText, 20);
-            DrawRectangle(12, 12, fpsWidth + 16, 30, Fade(BLACK, 0.55f));
-            DrawText(fpsText, 20, 17, 20, LIME);
+            const int fpsX = screenWidth - fpsWidth - 28;
+            DrawRectangle(fpsX - 8, 12, fpsWidth + 16, 30, Fade(BLACK, 0.55f));
+            DrawText(fpsText, fpsX, 17, 20, LIME);
         }
 
         EndDrawing();
