@@ -10,6 +10,9 @@ cd "$ROOT_DIR"
 ANDROID_SDK="${ANDROID_SDK:-$HOME/Android/Sdk}"
 ANDROID_ABI="${ANDROID_ABI:-arm64-v8a}"
 ANDROID_API="${ANDROID_API:-33}"
+ANDROID_MIN_SDK="${ANDROID_MIN_SDK:-21}"
+APP_VERSION_CODE="${APP_VERSION_CODE:-2}"
+APP_VERSION_NAME="${APP_VERSION_NAME:-1.2.2}"
 
 KEYSTORE_PATH="${KEYSTORE_PATH:-$ROOT_DIR/android/my-release-key.keystore}"
 KEY_ALIAS="${KEY_ALIAS:-my-key-alias}"
@@ -80,7 +83,17 @@ javac -source 1.8 -target 1.8 \
 pushd "$APK_BUILD_DIR" >/dev/null
 
 APK_BASE_NAME="chicken_potato_fps-${ANDROID_ABI}"
-aapt package -f -M AndroidManifest.xml -S res -I "$ANDROID_JAR" -F temp.apk
+aapt package -f \
+    -M AndroidManifest.xml \
+    -S res \
+    -I "$ANDROID_JAR" \
+    --min-sdk-version "$ANDROID_MIN_SDK" \
+    --target-sdk-version "$ANDROID_API" \
+    --version-code "$APP_VERSION_CODE" \
+    --version-name "$APP_VERSION_NAME" \
+    --replace-version \
+    --error-on-failed-insert \
+    -F temp.apk
 aapt add temp.apk classes.dex
 aapt add temp.apk "lib/${ANDROID_ABI}/libchicken_potato_fps.so"
 
