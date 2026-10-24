@@ -6,5 +6,18 @@ build-web/
 apk-build/
 highscores.txt
 
+# IDE files
+.idea/
+android/.idea/
+android/*.iml
+
+# Android packaging artifacts
+android/out/
+*.apk
+*.apks
+*.aab
+*.keystore
+*.jks
+
 # Emscripten SDK (developers install locally)
 emsdk/

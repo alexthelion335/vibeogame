@@ -53,6 +53,21 @@ After building, you'll have `libchicken_potato_fps.so`. To create a full APK:
 3. Copy the built `.so` file to `app/src/main/jniLibs/<abi>/`
 4. Build APK from Android Studio
 
+If Android Studio complains about manifest syntax on newer AGP versions, keep SDK/version values in Gradle instead of the manifest:
+
+```gradle
+android {
+   namespace "com.alexkinch.chickenpotato"
+   defaultConfig {
+      applicationId "com.alexkinch.chickenpotato"
+      minSdk 21
+      targetSdk 33
+      versionCode 2
+      versionName "1.2.2"
+   }
+}
+```
+
 ### Using command line tools:
 
 ```bash
@@ -129,3 +144,22 @@ adb install -r chicken_potato_fps.apk
 - Network permissions are included for multiplayer support
 - The app requires OpenGL ES 2.0 or higher
 - Android packaging includes `GameActivity.java` for immersive mode + keyboard support; include `classes.dex` when building APKs manually
+
+## If App Installs But Crashes Immediately
+
+Run:
+
+```bash
+adb logcat -c
+adb logcat -s AndroidRuntime,ActivityManager,linker,DEBUG
+```
+
+Most common causes:
+
+1. `ClassNotFoundException: com.alexkinch.chickenpotato.GameActivity`
+   - `GameActivity.java` was not compiled or `classes.dex` was not added to the APK.
+2. `UnsatisfiedLinkError` or `dlopen failed`
+   - `lib/<abi>/libchicken_potato_fps.so` is missing or wrong ABI.
+   - If built with `c++_shared`, `lib/<abi>/libc++_shared.so` is missing.
+3. `Unable to find native library chicken_potato_fps`
+   - Native lib is in the wrong APK path (must be under `lib/<abi>/`, not `<abi>/` at root).

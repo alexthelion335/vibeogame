@@ -42,6 +42,8 @@ Note: The build script uses `c++_static` to avoid missing `libc++_shared.so` cra
 4. Build → Generate Signed Bundle / APK
 5. Follow the wizard to sign and build
 
+If Android Studio reports manifest syntax issues, set SDK/version in `app/build.gradle` (`minSdk`, `targetSdk`, `versionCode`, `versionName`, `namespace`) and keep the manifest focused on app components/permissions.
+
 ### Method B: Command Line (Advanced)
 
 See full instructions in `android/README.md`
@@ -105,10 +107,13 @@ chmod +x android/build-android.sh
 
 ### Game crashes on start
 - Check logcat: `adb logcat | grep chicken`
+- Better filter: `adb logcat -s AndroidRuntime,ActivityManager,linker,DEBUG`
 - Verify OpenGL ES 2.0 support on device
 - Check if device meets minimum API 21 requirement
 - If logcat says `Unable to find native library chicken_potato_fps`, your APK likely has `arm64-v8a/libchicken_potato_fps.so` instead of `lib/arm64-v8a/libchicken_potato_fps.so`
 - Rebuild APK by running `aapt package ... -F temp.apk` first, then `aapt add temp.apk lib/arm64-v8a/libchicken_potato_fps.so`
+- If logcat shows `ClassNotFoundException: com.alexkinch.chickenpotato.GameActivity`, compile `android/src/com/alexkinch/chickenpotato/GameActivity.java` and include `classes.dex` in the APK
+- If logcat shows `libc++_shared.so` missing, rebuild with `-DCMAKE_ANDROID_STL_TYPE=c++_static` or package `libc++_shared.so`
 
 ### Controls not responding
 - Touch might be captured by UI elements

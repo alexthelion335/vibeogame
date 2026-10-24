@@ -4,10 +4,6 @@
     android:versionCode="2"
     android:versionName="1.2.2">
 
-    <uses-sdk
-        android:minSdkVersion="21"
-        android:targetSdkVersion="33" />
-
 
     <!-- OpenGL ES 2.0 -->
     <uses-feature android:glEsVersion="0x00020000" android:required="true" />
@@ -23,6 +19,7 @@
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+        android:extractNativeLibs="true"
         android:hasCode="true">
 
         <activity
@@ -30,7 +27,7 @@
             android:label="Chicken Potato FPS"
             android:immersive="true"
             android:screenOrientation="landscape"
-            android:configChanges="orientation|keyboardHidden|screenSize"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:launchMode="singleTask"
             android:exported="true">
 
