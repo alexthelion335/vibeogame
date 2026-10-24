@@ -62,8 +62,8 @@ android {
       applicationId "com.alexkinch.chickenpotato"
       minSdk 21
       targetSdk 33
-      versionCode 2
-      versionName "1.2.2"
+      versionCode 3
+      versionName "1.3.0"
    }
 }
 ```
