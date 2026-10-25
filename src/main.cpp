@@ -4223,8 +4223,9 @@ int main() {
                 uint8_t moveMask = 0;
                 if (coopHealth > 0.0f) {
 #ifdef PLATFORM_ANDROID
-                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.y > 0.1f) moveMask |= (1 << 0);
-                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.y < -0.1f) moveMask |= (1 << 1);
+                    // Screen-space joystick Y grows downward, so upward movement is negative Y.
+                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.y < -0.1f) moveMask |= (1 << 0);
+                    if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.y > 0.1f) moveMask |= (1 << 1);
                     if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.x < -0.1f) moveMask |= (1 << 2);
                     if (touchControls.moveJoystick.active && touchControls.moveJoystick.direction.x > 0.1f) moveMask |= (1 << 3);
                     if (touchControls.jumpButton.pressed) moveMask |= (1 << 5);
