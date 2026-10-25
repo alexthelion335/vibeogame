@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -980,6 +981,10 @@ int main() {
     bool inventoryOpen = false;
     int inventorySelection = 0;
     int inventorySwapFrom = -1;
+    bool debugMenuOpen = false;
+    int debugSelectedWave = 1;
+    std::string debugWaveInput;
+    bool debugWaveInputFocused = true;
 
     struct RemoteInputState {
         bool forward = false;
@@ -3537,6 +3542,106 @@ int main() {
             continue;
         }
 
+        // The debug panel is intentionally available only during gameplay.
+        if (screenState == ScreenState::Playing && IsKeyPressed(KEY_GRAVE)) {
+            debugMenuOpen = !debugMenuOpen;
+            if (debugMenuOpen) {
+                debugSelectedWave = wave;
+                debugWaveInput.clear();
+                debugWaveInputFocused = true;
+                EnableCursor();
+            } else if (!paused && !dead && !shopOpen && !inventoryOpen) {
+#ifndef PLATFORM_ANDROID
+                DisableCursor();
+#endif
+            }
+        }
+
+        Rectangle debugPanel = {static_cast<float>(screenWidth / 2 - 260),
+                                 static_cast<float>(screenHeight / 2 - 250), 520.0f, 500.0f};
+        Rectangle debugWaveInputRect = {debugPanel.x + 32.0f, debugPanel.y + 98.0f, 456.0f, 44.0f};
+        std::array<Rectangle, 6> debugPresetRects{};
+        for (int i = 0; i < static_cast<int>(debugPresetRects.size()); ++i) {
+            debugPresetRects[i] = {debugPanel.x + 32.0f + (i % 3) * 156.0f,
+                                   debugPanel.y + 154.0f + (i / 3) * 44.0f, 144.0f, 36.0f};
+        }
+        Rectangle debugLoadWave = {debugPanel.x + 32.0f, debugPanel.y + 250.0f, 456.0f, 44.0f};
+        Rectangle debugMiniBoss = {debugPanel.x + 32.0f, debugPanel.y + 308.0f, 220.0f, 44.0f};
+        Rectangle debugBigBoss = {debugPanel.x + 268.0f, debugPanel.y + 308.0f, 220.0f, 44.0f};
+        Rectangle debugHeal = {debugPanel.x + 32.0f, debugPanel.y + 362.0f, 220.0f, 44.0f};
+        Rectangle debugGear = {debugPanel.x + 268.0f, debugPanel.y + 362.0f, 220.0f, 44.0f};
+        Rectangle debugClose = {debugPanel.x + 32.0f, debugPanel.y + 426.0f, 456.0f, 44.0f};
+        if (debugMenuOpen && screenState == ScreenState::Playing) {
+            auto syncDebugWaveInput = [&]() {
+                if (!debugWaveInput.empty()) {
+                    debugSelectedWave = std::clamp(std::atoi(debugWaveInput.c_str()), 1, 9999);
+                }
+            };
+            if (debugWaveInputFocused) {
+                if (IsKeyPressed(KEY_BACKSPACE) && !debugWaveInput.empty()) {
+                    debugWaveInput.pop_back();
+                    syncDebugWaveInput();
+                }
+                int charPressed = GetCharPressed();
+                while (charPressed > 0) {
+                    if (charPressed >= '0' && charPressed <= '9' && debugWaveInput.size() < 4) {
+                        debugWaveInput.push_back(static_cast<char>(charPressed));
+                        syncDebugWaveInput();
+                    }
+                    charPressed = GetCharPressed();
+                }
+            }
+
+            auto loadDebugWave = [&]() {
+                chickens.clear(); potatoes.clear(); enemyPotatoes.clear(); grenades.clear();
+                dead = false; playerHealth = 100.0f; coopHealth = 100.0f;
+                shopOpen = false; inventoryOpen = false; paused = false;
+                startWave(debugSelectedWave);
+            };
+            if (debugWaveInputFocused && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))) {
+                loadDebugWave();
+            }
+
+            if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                Vector2 mouse = GetMousePosition();
+                if (CheckCollisionPointRec(mouse, debugWaveInputRect)) {
+                    debugWaveInputFocused = true;
+                } else {
+                    debugWaveInputFocused = false;
+                    bool presetClicked = false;
+                    const int presetWaves[] = {10, 20, 25, 30, 40, 50};
+                    for (int i = 0; i < static_cast<int>(debugPresetRects.size()); ++i) {
+                        if (CheckCollisionPointRec(mouse, debugPresetRects[i])) {
+                            debugSelectedWave = presetWaves[i];
+                            debugWaveInput = std::to_string(debugSelectedWave);
+                            presetClicked = true;
+                            loadDebugWave();
+                            break;
+                        }
+                    }
+                    if (!presetClicked && CheckCollisionPointRec(mouse, debugLoadWave)) {
+                        loadDebugWave();
+                    } else if (CheckCollisionPointRec(mouse, debugMiniBoss)) {
+                        spawnBoss(1);
+                    } else if (CheckCollisionPointRec(mouse, debugBigBoss)) {
+                        spawnBoss(2);
+                    } else if (CheckCollisionPointRec(mouse, debugHeal)) {
+                        playerHealth = 100.0f; coopHealth = 100.0f; dead = false;
+                        deathCause = DeathCause::None;
+                    } else if (CheckCollisionPointRec(mouse, debugGear)) {
+                        chickenNuggets += 500;
+                        inventory[1].owned = true; inventory[2].owned = true;
+                        ownsScythe = true; hasShieldCharge = true;
+                    } else if (CheckCollisionPointRec(mouse, debugClose)) {
+                        debugMenuOpen = false;
+#ifndef PLATFORM_ANDROID
+                        if (!paused && !dead && !shopOpen && !inventoryOpen) DisableCursor();
+#endif
+                    }
+                }
+            }
+        }
+
         if (!dead && ((!controllerOwnsUi && IsKeyPressed(KEY_ESCAPE)) ||
             (controllerOwnsUi && controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)))) {
             paused = !paused;
@@ -3559,7 +3664,7 @@ int main() {
             if (cloud.pos.x > 180.0f) cloud.pos.x = -180.0f;
         }
 
-        if (paused && !dead) {
+        if (paused && !dead && !debugMenuOpen) {
             if (IsKeyPressed(KEY_UP) || controllerMenuUpPressed) {
                 pauseSelection = (pauseSelection + 7) % 8;
             }
@@ -3882,7 +3987,7 @@ int main() {
             }
             lastMenuPressed = touchControls.menuButton.pressed;
 #endif
-        } else if (!paused) {
+        } else if (!paused && !debugMenuOpen) {
             bool onlineClient = (gameMode == GameMode::Online && netRole == NetRole::Client);
 
             // Update touch controls
@@ -4699,7 +4804,7 @@ int main() {
             );
         }
 
-        if (!dead && !paused && !shopOpen && !inventoryOpen && IsCursorHidden() == false) {
+        if (!dead && !paused && !shopOpen && !inventoryOpen && !debugMenuOpen && IsCursorHidden() == false) {
 #ifndef PLATFORM_ANDROID
             DisableCursor();
 #endif
@@ -5577,7 +5682,7 @@ int main() {
 #endif
         }
 
-        if (paused && !dead) {
+        if (paused && !dead && !debugMenuOpen) {
             DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.55f));
             DrawRectangle(panelX, panelY, panelW, panelH, Fade(DARKGRAY, 0.90f));
             DrawRectangleLinesEx({static_cast<float>(panelX), static_cast<float>(panelY), static_cast<float>(panelW), static_cast<float>(panelH)}, 3, YELLOW);
@@ -5617,6 +5722,44 @@ int main() {
                                      panelX + 70, panelY + 482, 18, LIGHTGRAY, playStationController);
             DrawControllerPromptLine(controllerMapped ? "Left/Right: change   Start: resume" : "UP/DOWN + ENTER still work   ESC: Resume",
                                      panelX + 70, panelY + 500, 18, LIGHTGRAY, playStationController);
+        }
+
+        if (debugMenuOpen && screenState == ScreenState::Playing) {
+            DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.62f));
+            DrawRectangleRounded(debugPanel, 0.04f, 12, {18, 25, 38, 248});
+            DrawRectangleRoundedLines(debugPanel, 0.04f, 12, SKYBLUE);
+            DrawText("DEBUG MENU", static_cast<int>(debugPanel.x) + 32, static_cast<int>(debugPanel.y) + 24, 32, YELLOW);
+            DrawText("Type any wave or choose a quick jump", static_cast<int>(debugPanel.x) + 32,
+                     static_cast<int>(debugPanel.y) + 68, 18, RAYWHITE);
+            auto drawDebugButton = [](Rectangle rect, const char* label, Color color) {
+                DrawRectangleRounded(rect, 0.18f, 8, Fade(color, 0.78f));
+                DrawRectangleRoundedLines(rect, 0.18f, 8, color);
+                int size = 20;
+                DrawText(label, static_cast<int>(rect.x + rect.width / 2 - MeasureText(label, size) / 2),
+                         static_cast<int>(rect.y + rect.height / 2 - size / 2), size, WHITE);
+            };
+            DrawRectangleRounded(debugWaveInputRect, 0.12f, 6,
+                                 debugWaveInputFocused ? Fade(SKYBLUE, 0.24f) : Fade(DARKGRAY, 0.85f));
+            DrawRectangleRoundedLines(debugWaveInputRect, 0.12f, 6,
+                                      debugWaveInputFocused ? SKYBLUE : GRAY);
+            const char* waveInputLabel = debugWaveInput.empty() ? "Type wave number..." : debugWaveInput.c_str();
+            DrawText(waveInputLabel, static_cast<int>(debugWaveInputRect.x) + 16,
+                     static_cast<int>(debugWaveInputRect.y) + 11, 22,
+                     debugWaveInput.empty() ? Fade(RAYWHITE, 0.55f) : WHITE);
+            const int presetWaves[] = {10, 20, 25, 30, 40, 50};
+            for (int i = 0; i < static_cast<int>(debugPresetRects.size()); ++i) {
+                drawDebugButton(debugPresetRects[i], TextFormat("WAVE %i", presetWaves[i]),
+                                presetWaves[i] == 25 || presetWaves[i] == 50 ? VIOLET : SKYBLUE);
+            }
+            drawDebugButton(debugLoadWave, TextFormat("LOAD WAVE %i  (clears enemies)", debugSelectedWave), ORANGE);
+            drawDebugButton(debugMiniBoss, "SPAWN MINI-BOSS", VIOLET);
+            drawDebugButton(debugBigBoss, "SPAWN BIG BOSS", RED);
+            drawDebugButton(debugHeal, "RESTORE HEALTH", GREEN);
+            drawDebugButton(debugGear, "GRANT TEST GEAR", GOLD);
+            drawDebugButton(debugClose, "CLOSE  (`)", SKYBLUE);
+            DrawText("Enter loads the typed wave. Preset buttons jump there immediately.",
+                     static_cast<int>(debugPanel.x) + 32, static_cast<int>(debugPanel.y) + 480,
+                     15, Fade(RAYWHITE, 0.75f));
         }
 
         if (showFpsCounter) {
