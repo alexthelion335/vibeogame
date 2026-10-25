@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 include(FetchContent)
+find_package(CURL QUIET)
 
 # Build metadata shown for each compiled binary
 set(BUILD_PLATFORM "unknown")
@@ -91,6 +92,15 @@ if(ANDROID)
 else()
     add_executable(chicken_potato_fps src/main.cpp)
     target_link_libraries(chicken_potato_fps PRIVATE raylib)
+    target_compile_definitions(chicken_potato_fps PRIVATE APP_VERSION_STR="${PROJECT_VERSION}")
+
+    if(CURL_FOUND)
+        target_link_libraries(chicken_potato_fps PRIVATE CURL::libcurl)
+        target_compile_definitions(chicken_potato_fps PRIVATE HAS_CURL)
+        message(STATUS "ChickenPotatoFPS: libcurl found, latest-version checks enabled")
+    else()
+        message(STATUS "ChickenPotatoFPS: libcurl not found, latest-version checks disabled")
+    endif()
     
     if(EMSCRIPTEN)
         # Emscripten-specific settings for web builds
@@ -106,6 +116,10 @@ else()
     elseif(UNIX AND NOT APPLE)
         target_link_libraries(chicken_potato_fps PRIVATE m dl pthread rt X11)
     endif()
+endif()
+
+if(ANDROID)
+    target_compile_definitions(chicken_potato_fps PRIVATE APP_VERSION_STR="${PROJECT_VERSION}")
 endif()
 
 if(NOT ANDROID)

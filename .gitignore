@@ -1,9 +1,11 @@
 build/
 build-linux/
+build-linux-arm64/
 build-windows/
 build-android/
 build-web/
 apk-build/
+release-artifacts/
 highscores.txt
 
 # IDE files

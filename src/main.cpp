@@ -4,13 +4,20 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <future>
 #include <sstream>
 #include <string>
 #include <vector>
+
+#ifdef HAS_CURL
+    #include <curl/curl.h>
+#endif
 
 #ifdef PLATFORM_ANDROID
     #include <jni.h>
@@ -21,6 +28,12 @@ extern "C" {
     struct android_app* GetAndroidApp(void);
 }
 #endif
+
+#ifndef APP_VERSION_STR
+    #define APP_VERSION_STR "1.3.0"
+#endif
+
+static constexpr const char* APP_VERSION = APP_VERSION_STR;
 
 // Platform-specific networking
 #ifdef _WIN32
@@ -187,6 +200,7 @@ constexpr uint8_t NET_DISCOVER = 5;
 constexpr uint8_t NET_DISCOVER_REPLY = 6;
 constexpr uint8_t NET_SHOP_PURCHASE = 7;
 constexpr uint8_t NET_LOBBY = 8;
+constexpr uint8_t NET_VERSION_MISMATCH = 9;
 constexpr int NET_PORT = 42069;
 constexpr int MAX_SYNC_CHICKENS = 72;
 constexpr int MAX_SYNC_POTATOES = 96;
@@ -208,6 +222,12 @@ struct NetHeader {
 
 struct NetHelloPacket {
     NetHeader h{};
+    char version[16]{};
+};
+
+struct NetVersionMismatchPacket {
+    NetHeader h{};
+    char requiredVersion[16]{};
 };
 
 struct NetInputPacket {
@@ -407,6 +427,79 @@ static void DrawMenuCard(Rectangle rect,
     DrawText(subtitle, static_cast<int>(rect.x) + 24, static_cast<int>(rect.y) + 50, subtitleSize,
              selected ? Fade(accent, 0.95f) : Fade(RAYWHITE, 0.82f));
 }
+
+static std::string NormalizeVersionTag(std::string version) {
+    while (!version.empty() && (version.front() == 'v' || version.front() == 'V' || version.front() == ' ' || version.front() == '\t')) {
+        version.erase(version.begin());
+    }
+    while (!version.empty() && (version.back() == '\r' || version.back() == '\n' || version.back() == ' ' || version.back() == '\t')) {
+        version.pop_back();
+    }
+    return version;
+}
+
+static bool ParseSemVer(const std::string& value, int& major, int& minor, int& patch) {
+    major = 0;
+    minor = 0;
+    patch = 0;
+    const std::string normalized = NormalizeVersionTag(value);
+    return std::sscanf(normalized.c_str(), "%d.%d.%d", &major, &minor, &patch) == 3;
+}
+
+static int CompareSemVer(const std::string& a, const std::string& b) {
+    int aMajor = 0, aMinor = 0, aPatch = 0;
+    int bMajor = 0, bMinor = 0, bPatch = 0;
+    if (!ParseSemVer(a, aMajor, aMinor, aPatch) || !ParseSemVer(b, bMajor, bMinor, bPatch)) {
+        return 0;
+    }
+    if (aMajor != bMajor) return (aMajor < bMajor) ? -1 : 1;
+    if (aMinor != bMinor) return (aMinor < bMinor) ? -1 : 1;
+    if (aPatch != bPatch) return (aPatch < bPatch) ? -1 : 1;
+    return 0;
+}
+
+#if defined(HAS_CURL) && !defined(PLATFORM_ANDROID)
+static size_t CurlWriteToString(char* ptr, size_t size, size_t nmemb, void* userdata) {
+    if (ptr == nullptr || userdata == nullptr) return 0;
+    std::string* out = static_cast<std::string*>(userdata);
+    out->append(ptr, size * nmemb);
+    return size * nmemb;
+}
+
+static std::string FetchLatestVersionFromGitHub() {
+    CURL* curl = curl_easy_init();
+    if (curl == nullptr) return "";
+
+    std::string body;
+    curl_easy_setopt(curl, CURLOPT_URL, "https://api.github.com/repos/alexthelion335/vibeogame/releases/latest");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "ChickenPotatoFPS-VersionCheck/1.0");
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2500L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 4500L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteToString);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+
+    const CURLcode code = curl_easy_perform(curl);
+    long httpCode = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &httpCode);
+    curl_easy_cleanup(curl);
+    if (code != CURLE_OK || httpCode < 200 || httpCode >= 300) {
+        return "";
+    }
+
+    const std::string tagKey = "\"tag_name\"";
+    size_t keyPos = body.find(tagKey);
+    if (keyPos == std::string::npos) return "";
+    size_t colonPos = body.find(':', keyPos + tagKey.size());
+    if (colonPos == std::string::npos) return "";
+    size_t firstQuote = body.find('"', colonPos + 1);
+    if (firstQuote == std::string::npos) return "";
+    size_t secondQuote = body.find('"', firstQuote + 1);
+    if (secondQuote == std::string::npos || secondQuote <= firstQuote + 1) return "";
+
+    return NormalizeVersionTag(body.substr(firstQuote + 1, secondQuote - firstQuote - 1));
+}
+#endif
 
 struct HighscoreEntry {
     std::string initials = "---";
@@ -722,6 +815,7 @@ int main() {
     bool netHasPeer = false;
     std::string netJoinAddress = "127.0.0.1";
     std::string netStatus = "";
+    std::string multiplayerVersionNotice = "";
     uint32_t netSequence = 1;
     float netSendCooldown = 0.0f;
     float netSnapshotCooldown = 0.0f;
@@ -733,6 +827,18 @@ int main() {
     bool remoteReady = false;
     bool onlineGameStarted = false;
     std::string localIpAddress = GetLocalIpAddress();
+    std::string latestVersion = "";
+    std::string latestVersionLine = "Latest: checking...";
+    Color latestVersionColor = Fade(RAYWHITE, 0.70f);
+#if defined(HAS_CURL) && !defined(PLATFORM_ANDROID)
+    std::future<std::string> latestVersionFuture = std::async(std::launch::async, []() {
+        return FetchLatestVersionFromGitHub();
+    });
+    bool latestVersionPending = true;
+#else
+    bool latestVersionPending = false;
+    latestVersionLine = "Latest: unavailable";
+#endif
     std::vector<std::string> discoveredHosts;
     double nextDiscoveryTime = 0.0;
 #ifdef _WIN32
@@ -1264,6 +1370,7 @@ int main() {
 #endif
         NetHelloPacket hello{};
         hello.h.type = NET_HELLO;
+        std::snprintf(hello.version, sizeof(hello.version), "%s", APP_VERSION);
 #ifdef _WIN32
         sendto(netSocket, reinterpret_cast<const char*>(&hello), sizeof(hello), 0,
                reinterpret_cast<const sockaddr*>(&netPeerAddr), sizeof(netPeerAddr));
@@ -1332,14 +1439,37 @@ int main() {
 
             if (netRole == NetRole::Host) {
                 if (hdr->type == NET_HELLO) {
-                    netPeerAddr = from;
-                    netHasPeer = true;
-                    netStatus = "Client connected";
-                } else if (hdr->type == NET_INPUT && bytes >= static_cast<ssize_t>(sizeof(NetInputPacket))) {
-                    if (!netHasPeer) {
+                    std::string clientVersion = "unknown";
+                    bool versionOk = false;
+                    if (bytes >= static_cast<ssize_t>(sizeof(NetHelloPacket))) {
+                        const NetHelloPacket* hello = reinterpret_cast<const NetHelloPacket*>(buffer);
+                        clientVersion = NormalizeVersionTag(hello->version);
+                        versionOk = !clientVersion.empty() && clientVersion == APP_VERSION;
+                    }
+
+                    if (versionOk) {
                         netPeerAddr = from;
                         netHasPeer = true;
+                        netStatus = "Client connected";
+                    } else {
+                        NetVersionMismatchPacket mismatch{};
+                        mismatch.h.type = NET_VERSION_MISMATCH;
+                        std::snprintf(mismatch.requiredVersion, sizeof(mismatch.requiredVersion), "%s", APP_VERSION);
+#ifdef _WIN32
+                        sendto(netSocket, reinterpret_cast<const char*>(&mismatch), sizeof(mismatch), 0,
+                               reinterpret_cast<const sockaddr*>(&from), fromLen);
+#else
+                        sendto(netSocket, &mismatch, sizeof(mismatch), 0,
+                               reinterpret_cast<const sockaddr*>(&from), fromLen);
+#endif
+                        if (clientVersion == "unknown") {
+                            netStatus = TextFormat("Rejected legacy client (need %s)", APP_VERSION);
+                        } else {
+                            netStatus = TextFormat("Rejected client %s (need %s)", clientVersion.c_str(), APP_VERSION);
+                        }
                     }
+                } else if (hdr->type == NET_INPUT && bytes >= static_cast<ssize_t>(sizeof(NetInputPacket))) {
+                    if (!netHasPeer) continue;
                     const NetInputPacket* in = reinterpret_cast<const NetInputPacket*>(buffer);
                     uint8_t mask = in->moveMask;
                     remoteInput.forward = (mask & (1 << 0)) != 0;
@@ -1362,6 +1492,20 @@ int main() {
                 if (hdr->type == NET_DISCONNECT) {
                     netDisconnected = true;
                     netStatus = "Host disconnected";
+                } else if (hdr->type == NET_VERSION_MISMATCH && bytes >= static_cast<ssize_t>(sizeof(NetVersionMismatchPacket))) {
+                    const NetVersionMismatchPacket* mismatch = reinterpret_cast<const NetVersionMismatchPacket*>(buffer);
+                    std::string requiredVersion = NormalizeVersionTag(mismatch->requiredVersion);
+                    if (requiredVersion.empty()) requiredVersion = APP_VERSION;
+                    multiplayerVersionNotice = TextFormat("Host requires version %s", requiredVersion.c_str());
+                    netStatus = TextFormat("Version mismatch (need %s)", requiredVersion.c_str());
+                    closeNetwork();
+                    screenState = ScreenState::OnlineSetup;
+                    onlineSetupSelection = 1;
+                    onlineIpFocused = true;
+                    discoveredHosts.clear();
+                    startDiscovery();
+                    nextDiscoveryTime = 0.0;
+                    break;
                 } else if (hdr->type == NET_SNAPSHOT && bytes >= static_cast<ssize_t>(sizeof(NetSnapshotPacket))) {
                     const NetSnapshotPacket* snap = reinterpret_cast<const NetSnapshotPacket*>(buffer);
 
@@ -1960,6 +2104,30 @@ int main() {
     #ifdef PLATFORM_ANDROID
         SetAndroidImmersiveMode();
     #endif
+
+    #if defined(HAS_CURL) && !defined(PLATFORM_ANDROID)
+        if (latestVersionPending &&
+            latestVersionFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            latestVersionPending = false;
+            latestVersion = NormalizeVersionTag(latestVersionFuture.get());
+
+            if (latestVersion.empty()) {
+                latestVersionLine = "Latest: check failed";
+                latestVersionColor = ORANGE;
+            } else {
+                const int cmp = CompareSemVer(APP_VERSION, latestVersion);
+                if (cmp < 0) {
+                    latestVersionLine = TextFormat("Latest: %s (update recommended for multiplayer)", latestVersion.c_str());
+                    latestVersionColor = ORANGE;
+                    multiplayerVersionNotice = TextFormat("Update available: %s (you are on %s)", latestVersion.c_str(), APP_VERSION);
+                } else {
+                    latestVersionLine = TextFormat("Latest: %s (up to date)", latestVersion.c_str());
+                    latestVersionColor = LIME;
+                    multiplayerVersionNotice.clear();
+                }
+            }
+        }
+    #endif
         
         // Reinitialize touch controls if screen size changed
 #ifdef PLATFORM_ANDROID
@@ -2176,6 +2344,11 @@ int main() {
 
             DrawCenteredTextLine("CHICKEN POTATO FPS", centerX, introY + 28, 54, RAYWHITE);
             DrawCenteredTextLine("Pick a mode to deploy your potato cannon", centerX, introY + 92, 25, Fade(RAYWHITE, 0.92f));
+            DrawText(TextFormat("Version %s", APP_VERSION), introX + 24, introY + 24, 20, Fade(RAYWHITE, 0.86f));
+            DrawText(latestVersionLine.c_str(), introX + 24, introY + 52, 18, latestVersionColor);
+            if (!multiplayerVersionNotice.empty()) {
+                DrawText(multiplayerVersionNotice.c_str(), introX + 24, introY + 76, 18, ORANGE);
+            }
 
             DrawMenuCard(singleRect, "Singleplayer", "Solo survival against endless chickens", introSelection == 0, singleHover, {255, 224, 85, 255});
             DrawMenuCard(coopRect, "Local Co-op", "Player 2: IJKL + Right Shift + Right Ctrl", introSelection == 1, coopHover, {118, 215, 255, 255});
@@ -2477,6 +2650,11 @@ int main() {
             DrawCenteredTextLine("ONLINE MULTIPLAYER", centerX, setupY + 24, 52, RAYWHITE);
             DrawCenteredTextLine("Choose host/join, then launch", centerX, setupY + 92, 24, Fade(RAYWHITE, 0.92f));
             DrawCenteredTextLine(TextFormat("This device LAN IP: %s", localIpAddress.c_str()), centerX, setupY + 126, 22, LIME);
+            DrawText(TextFormat("Version %s", APP_VERSION), setupX + 24, setupY + 20, 18, Fade(RAYWHITE, 0.86f));
+            DrawText(latestVersionLine.c_str(), setupX + 24, setupY + 42, 16, latestVersionColor);
+            if (!multiplayerVersionNotice.empty()) {
+                DrawText(multiplayerVersionNotice.c_str(), setupX + 24, setupY + 62, 16, ORANGE);
+            }
 
             DrawMenuCard(hostRect, "Host Game", "Create lobby and wait for player", onlineSetupSelection == 0, hostHover, {255, 224, 85, 255});
             DrawMenuCard(joinRect, "Join Game", "Connect to host IPv4 address", onlineSetupSelection == 1, joinHover, {173, 135, 255, 255});
