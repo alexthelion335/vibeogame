@@ -797,7 +797,8 @@ int main() {
     int introSelection = 0;
     bool suppressIntroActivation = false;
     int onlineSetupSelection = 0;
-    bool onlineIpFocused = true;
+    bool onlineIpFocused = false;
+    bool onlinePortFocused = false;
     Vector3 coopPos = {2.5f, playerHeight, 8.0f};
     float coopYaw = PI;
     float coopPitch = 0.0f;
@@ -820,6 +821,8 @@ int main() {
     sockaddr_in netPeerAddr{};
     bool netHasPeer = false;
     std::string netJoinAddress = "127.0.0.1";
+    std::string netJoinPort = "42069";
+    int onlineKeyboardSelection = 0;
     std::string netStatus = "";
     std::string multiplayerVersionNotice = "";
     uint32_t netSequence = 1;
@@ -832,6 +835,7 @@ int main() {
     bool localReady = false;
     bool remoteReady = false;
     bool onlineGameStarted = false;
+    int lobbySelection = 0;
     std::string localIpAddress = GetLocalIpAddress();
     std::string latestVersion = "";
     std::string latestVersionLine = "Latest: checking...";
@@ -880,16 +884,21 @@ int main() {
     bool highscoreSubmittedThisRun = false;
     bool enteringInitials = false;
     std::string pendingInitials = "AAA";
+    int initialsKeyboardSelection = 0;
+    bool initialsKeyboardDismissed = false;
     bool viewingHighscores = false;
+    int settingsSelection = 0;
 #ifdef PLATFORM_ANDROID
     bool highscoreKeyboardVisible = false;
 #endif
 
     bool shopOpen = false;
+    int shopSelection = 0;
     float shopTimer = 0.0f;
     constexpr float shopDuration = 10.0f;
 
     bool inventoryOpen = false;
+    int inventorySelection = 0;
     int inventorySwapFrom = -1;
 
     struct RemoteInputState {
@@ -1341,6 +1350,23 @@ int main() {
     };
 
     auto setupOnlineClient = [&]() -> bool {
+        int joinPort = 0;
+        if (netJoinPort.empty()) {
+            netStatus = "Invalid port";
+            return false;
+        }
+        for (char digit : netJoinPort) {
+            if (digit < '0' || digit > '9') {
+                netStatus = "Invalid port";
+                return false;
+            }
+            joinPort = joinPort * 10 + (digit - '0');
+            if (joinPort > 65535) break;
+        }
+        if (joinPort < 1 || joinPort > 65535) {
+            netStatus = "Invalid port (use 1-65535)";
+            return false;
+        }
         closeNetwork();
         netSocket = createUdpSocket();
 #ifdef _WIN32
@@ -1354,7 +1380,7 @@ int main() {
 
         sockaddr_in server{};
         server.sin_family = AF_INET;
-        server.sin_port = htons(NET_PORT);
+        server.sin_port = htons(static_cast<uint16_t>(joinPort));
         if (inet_pton(AF_INET, netJoinAddress.c_str(), &server.sin_addr) != 1) {
             netStatus = "Invalid host IP";
             closeNetwork();
@@ -2378,8 +2404,18 @@ int main() {
                                std::fabs(debugRightX) > 0.2f || std::fabs(debugRightY) > 0.2f ||
                                (controllerMapped && std::fabs(controllerAxis(GAMEPAD_AXIS_LEFT_TRIGGER)) > 0.2f) ||
                                (controllerMapped && std::fabs(controllerAxis(GAMEPAD_AXIS_RIGHT_TRIGGER)) > 0.2f);
+        bool anyControllerButtonDown = false;
+        bool anyControllerButtonPressed = false;
+        if (controllerMapped) {
+            for (int button = 0; button <= GAMEPAD_BUTTON_RIGHT_THUMB; ++button) {
+                if (controllerButtonDown(button)) {
+                    anyControllerButtonDown = true;
+                }
+                if (controllerButtonPressed(button)) anyControllerButtonPressed = true;
+            }
+        }
         static bool previousControllerInput = false;
-        bool controllerInputActive = debugButtonDown || debugAxisActive;
+        bool controllerInputActive = debugButtonDown || debugAxisActive || anyControllerButtonDown;
         if (controllerInputActive && !previousControllerInput) {
             TraceLog(LOG_INFO, "Gamepad input received: left=(%.2f, %.2f), right=(%.2f, %.2f), buttons=%s",
                      debugLeftX, debugLeftY, debugRightX, debugRightY,
@@ -2388,13 +2424,34 @@ int main() {
         previousControllerInput = controllerInputActive;
 
         static bool controllerOwnsUi = false;
+        static bool requireControllerButtonToResume = false;
         Vector2 pointerDelta = GetMouseDelta();
         bool mouseActivity = std::fabs(pointerDelta.x) > 0.5f || std::fabs(pointerDelta.y) > 0.5f ||
                              IsMouseButtonPressed(MOUSE_BUTTON_LEFT) ||
                              IsMouseButtonPressed(MOUSE_BUTTON_RIGHT) ||
                              IsMouseButtonPressed(MOUSE_BUTTON_MIDDLE);
-        if (mouseActivity) controllerOwnsUi = false;
-        else if (controllerInputActive) controllerOwnsUi = true;
+#ifdef PLATFORM_ANDROID
+        mouseActivity = mouseActivity || GetTouchPointCount() > 0;
+#endif
+        bool keyboardActivity = false;
+        for (int key = 1; key <= 512; ++key) {
+            if (IsKeyPressed(key)) {
+                keyboardActivity = true;
+                break;
+            }
+        }
+        if (mouseActivity || keyboardActivity) {
+            controllerOwnsUi = false;
+            requireControllerButtonToResume = true;
+        } else if (anyControllerButtonPressed) {
+            controllerOwnsUi = true;
+            requireControllerButtonToResume = false;
+        } else if (!requireControllerButtonToResume && controllerMapped &&
+                   (std::fabs(controllerAxis(GAMEPAD_AXIS_LEFT_X)) > 0.55f ||
+                    std::fabs(controllerAxis(GAMEPAD_AXIS_LEFT_Y)) > 0.55f)) {
+            controllerOwnsUi = true;
+        }
+        if (!controllerConnected) controllerOwnsUi = false;
 
         static int previousMenuVerticalDirection = 0;
         static int previousMenuHorizontalDirection = 0;
@@ -2431,15 +2488,89 @@ int main() {
         }
         const int menuVerticalStep = menuRepeatStep(menuVerticalDirection, previousMenuVerticalDirection, menuVerticalRepeatTimer);
         const int menuHorizontalStep = menuRepeatStep(menuHorizontalDirection, previousMenuHorizontalDirection, menuHorizontalRepeatTimer);
-        const bool controllerMenuUpPressed = menuVerticalStep < 0;
-        const bool controllerMenuDownPressed = menuVerticalStep > 0;
-        const bool controllerMenuLeftPressed = menuHorizontalStep < 0;
-        const bool controllerMenuRightPressed = menuHorizontalStep > 0;
+        const bool controllerMenuUpPressed = controllerOwnsUi && menuVerticalStep < 0;
+        const bool controllerMenuDownPressed = controllerOwnsUi && menuVerticalStep > 0;
+        const bool controllerMenuLeftPressed = controllerOwnsUi && menuHorizontalStep < 0;
+        const bool controllerMenuRightPressed = controllerOwnsUi && menuHorizontalStep > 0;
+
+        const bool controllerConfirmPressed = controllerOwnsUi && controllerMapped &&
+            controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN);
+        const bool controllerBackPressed = controllerOwnsUi && controllerMapped &&
+            controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);
+
+        auto drawVirtualKeyboard = [&](Rectangle bounds, std::string& value, bool numericOnly,
+                                       size_t maxLength, int& selection, bool confirmPressed,
+                                       bool backPressed, bool cancelPressed) -> int {
+            std::vector<std::string> keys;
+            if (numericOnly) {
+                keys = {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", ".", "DEL", "CLEAR", "DONE"};
+            } else {
+                for (char c = 'A'; c <= 'Z'; ++c) keys.emplace_back(1, c);
+                keys.insert(keys.end(), {"DEL", "DONE"});
+            }
+            const int columns = numericOnly ? 7 : 7;
+            const int rows = (static_cast<int>(keys.size()) + columns - 1) / columns;
+            selection = std::clamp(selection, 0, static_cast<int>(keys.size()) - 1);
+            if (controllerMenuLeftPressed) selection = (selection / columns) * columns + ((selection % columns + columns - 1) % columns);
+            if (controllerMenuRightPressed) {
+                const int rowStart = (selection / columns) * columns;
+                const int rowCount = std::min(columns, static_cast<int>(keys.size()) - rowStart);
+                selection = rowStart + ((selection - rowStart + 1) % rowCount);
+            }
+            if (controllerMenuUpPressed) selection = (selection - columns + static_cast<int>(keys.size())) % static_cast<int>(keys.size());
+            if (controllerMenuDownPressed) selection = (selection + columns) % static_cast<int>(keys.size());
+
+            int result = 0; // 1 = done, -1 = cancel
+            if (backPressed && !value.empty()) value.pop_back();
+            if (cancelPressed) result = -1;
+            if (confirmPressed && result == 0) {
+                const std::string& key = keys[selection];
+                if (key == "DEL") {
+                    if (!value.empty()) value.pop_back();
+                } else if (key == "CLEAR") {
+                    value.clear();
+                } else if (key == "DONE") {
+                    result = 1;
+                } else if (value.size() < maxLength) {
+                    value += key;
+                }
+            }
+
+            DrawRectangle(0, 0, screenWidth, screenHeight, Fade(BLACK, 0.40f));
+            DrawRectangleRounded(bounds, 0.08f, 10, Fade({12, 20, 34, 255}, 0.98f));
+            DrawRectangleRoundedLines(bounds, 0.08f, 10, SKYBLUE);
+            DrawCenteredTextLine(numericOnly ? "CONTROLLER KEYPAD" : "CONTROLLER KEYBOARD",
+                                 screenWidth / 2, static_cast<int>(bounds.y) + 5, 20, YELLOW);
+            DrawCenteredTextLine(TextFormat("Value: %s", value.c_str()), screenWidth / 2,
+                                 static_cast<int>(bounds.y) + 28, 16, RAYWHITE);
+            const float gap = 5.0f;
+            const float keyW = (bounds.width - 28.0f - gap * (columns - 1)) / columns;
+            const float keyH = std::min(42.0f, (bounds.height - 70.0f - gap * (rows - 1)) / rows);
+            for (int i = 0; i < static_cast<int>(keys.size()); ++i) {
+                int row = i / columns;
+                int col = i % columns;
+                Rectangle keyRect = {
+                    bounds.x + 14.0f + col * (keyW + gap),
+                    bounds.y + 50.0f + row * (keyH + gap),
+                    keyW, keyH
+                };
+                const bool selected = i == selection;
+                DrawRectangleRounded(keyRect, 0.18f, 6, selected ? Fade(ORANGE, 0.9f) : Fade(SKYBLUE, 0.32f));
+                DrawRectangleRoundedLines(keyRect, 0.18f, 6, selected ? YELLOW : Fade(RAYWHITE, 0.65f));
+                const int fontSize = keys[i].size() > 4 ? 14 : 20;
+                DrawCenteredTextLine(keys[i].c_str(), static_cast<int>(keyRect.x + keyRect.width / 2),
+                                     static_cast<int>(keyRect.y + keyRect.height / 2 - fontSize / 2), fontSize, RAYWHITE);
+            }
+            DrawCenteredTextLine("D-pad/Left Stick: move   A: type/select   B: delete   Select: close",
+                                 screenWidth / 2, static_cast<int>(bounds.y + bounds.height - 22), 15, Fade(RAYWHITE, 0.8f));
+            return result;
+        };
 
         const bool uiActive = screenState != ScreenState::Playing || paused || dead || shopOpen || inventoryOpen;
         if (uiActive) {
             if (controllerOwnsUi) {
-                if (!IsCursorHidden()) HideCursor();
+                if (IsCursorHidden()) EnableCursor();
+                HideCursor();
             } else if (IsCursorHidden()) {
                 EnableCursor();
                 ShowCursor();
@@ -2504,7 +2635,7 @@ int main() {
         }
 
         if (netDisconnected) {
-            if (IsKeyPressed(KEY_ESCAPE)) {
+            if ((!controllerOwnsUi && IsKeyPressed(KEY_ESCAPE)) || controllerBackPressed) {
                 netDisconnected = false;
                 closeNetwork();
                 screenState = ScreenState::Intro;
@@ -2576,7 +2707,9 @@ int main() {
                 }
 #endif
 
-                if (IsKeyPressed(KEY_ESCAPE) || hsBackPressed) {
+                if (IsKeyPressed(KEY_ESCAPE) || hsBackPressed || controllerBackPressed ||
+                    (controllerConfirmPressed && controllerOwnsUi) ||
+                    (!controllerOwnsUi && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)))) {
                     viewingHighscores = false;
                     continue;
                 }
@@ -2638,11 +2771,13 @@ int main() {
                 else if (settingsHover) introSelection = 4;
             }
 
-            if (controllerMapped) {
+            if (controllerMapped && controllerOwnsUi) {
                 if (controllerMenuUpPressed) introSelection = (introSelection + 4) % 5;
                 if (controllerMenuDownPressed) introSelection = (introSelection + 1) % 5;
-                if (controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)) shouldExit = true;
+                if (controllerOwnsUi && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)) shouldExit = true;
             }
+            if (!controllerOwnsUi && IsKeyPressed(KEY_UP)) introSelection = (introSelection + 4) % 5;
+            if (!controllerOwnsUi && IsKeyPressed(KEY_DOWN)) introSelection = (introSelection + 1) % 5;
 
             GameMode selectedMode = GameMode::SinglePlayer;
             bool startSelectedMode = false;
@@ -2667,8 +2802,8 @@ int main() {
                     screenState = ScreenState::Settings;
                 }
             }
-            if (allowIntroActivation && controllerMapped &&
-                controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
+            if (allowIntroActivation && (controllerConfirmPressed ||
+                (!controllerOwnsUi && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER))))) {
                 if (introSelection == 0 || introSelection == 1) {
                     selectedMode = (introSelection == 0) ? GameMode::SinglePlayer : GameMode::CoOp;
                     startSelectedMode = true;
@@ -2680,7 +2815,8 @@ int main() {
             if (openOnlineSetup) {
                 screenState = ScreenState::OnlineSetup;
                 onlineSetupSelection = 0;
-                onlineIpFocused = true;
+                onlineIpFocused = false;
+                onlinePortFocused = false;
                 discoveredHosts.clear();
                 startDiscovery();
                 nextDiscoveryTime = 0.0;
@@ -2822,7 +2958,19 @@ int main() {
             Vector2 settingsMouse = GetMousePosition();
             bool backHover = CheckCollisionPointRec(settingsMouse, backRect);
             bool settingsClick = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
-            if (IsKeyPressed(KEY_ESCAPE) || (settingsClick && backHover)) {
+            if (!controllerOwnsUi) {
+                if (CheckCollisionPointRec(settingsMouse, resolutionRect)) settingsSelection = 0;
+                else if (CheckCollisionPointRec(settingsMouse, displayModeRect)) settingsSelection = 1;
+                else if (CheckCollisionPointRec(settingsMouse, monitorRect)) settingsSelection = 2;
+                else if (CheckCollisionPointRec(settingsMouse, targetFpsRect)) settingsSelection = 3;
+                else if (CheckCollisionPointRec(settingsMouse, vsyncRect)) settingsSelection = 4;
+                else if (CheckCollisionPointRec(settingsMouse, fpsCounterRect)) settingsSelection = 5;
+                else if (backHover) settingsSelection = 6;
+            }
+            const bool settingsConfirm = controllerConfirmPressed ||
+                (!controllerOwnsUi && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)));
+            if (IsKeyPressed(KEY_ESCAPE) || (settingsClick && backHover) || controllerBackPressed ||
+                (settingsConfirm && settingsSelection == 6)) {
                 screenState = ScreenState::Intro;
                 suppressIntroActivation = true;
                 continue;
@@ -2861,25 +3009,36 @@ int main() {
                 }
             }
 
+            if (controllerMenuUpPressed) settingsSelection = (settingsSelection + 6) % 7;
+            if (controllerMenuDownPressed) settingsSelection = (settingsSelection + 1) % 7;
+            if (!controllerOwnsUi && IsKeyPressed(KEY_UP)) settingsSelection = (settingsSelection + 6) % 7;
+            if (!controllerOwnsUi && IsKeyPressed(KEY_DOWN)) settingsSelection = (settingsSelection + 1) % 7;
+            if ((controllerOwnsUi && (controllerMenuLeftPressed || controllerMenuRightPressed || controllerConfirmPressed)) ||
+                (!controllerOwnsUi && settingsConfirm)) {
+                const int step = controllerMenuLeftPressed ? -1 : 1;
+                if (settingsSelection == 0) applyResolutionIndex(currentResolutionIndex + step);
+                else if (settingsSelection == 1 && settingsConfirm) toggleFullscreenWindowed();
 #ifndef PLATFORM_ANDROID
-            if (IsKeyPressed(KEY_LEFT) || controllerMenuLeftPressed) {
-                applyResolutionIndex(currentResolutionIndex - 1);
-            }
-            if (IsKeyPressed(KEY_RIGHT) || controllerMenuRightPressed) {
-                applyResolutionIndex(currentResolutionIndex + 1);
-            }
-            if (IsKeyPressed(KEY_UP) || controllerMenuUpPressed) {
-                auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
-                int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
-                applyTargetFps(targetFpsOptions[(index + 1) % static_cast<int>(targetFpsOptions.size())]);
-            }
-            if (IsKeyPressed(KEY_DOWN) || controllerMenuDownPressed) {
-                auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
-                int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
-                index = (index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size());
-                applyTargetFps(targetFpsOptions[index]);
-            }
+                else if (settingsSelection == 2) applyMonitorIndex(selectedMonitor + step);
 #endif
+                else if (settingsSelection == 3) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    index = (index + step + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size());
+                    applyTargetFps(targetFpsOptions[index]);
+                } else if (settingsSelection == 4 && settingsConfirm) toggleVsync();
+                else if (settingsSelection == 5 && settingsConfirm) showFpsCounter = !showFpsCounter;
+            }
+            if (!controllerOwnsUi && (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_RIGHT))) {
+                const int step = IsKeyPressed(KEY_LEFT) ? -1 : 1;
+                if (settingsSelection == 0) applyResolutionIndex(currentResolutionIndex + step);
+                else if (settingsSelection == 3) {
+                    auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
+                    int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
+                    index = (index + step + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size());
+                    applyTargetFps(targetFpsOptions[index]);
+                }
+            }
 
             BeginDrawing();
             DrawRectangleGradientV(0, 0, screenWidth, screenHeight,
@@ -2921,7 +3080,13 @@ int main() {
             DrawRectangleRoundedLines(backRect, 0.2f, 8, RAYWHITE);
             DrawCenteredTextLine("Back", static_cast<int>(backRect.x + backRect.width / 2),
                                  static_cast<int>(backRect.y) + 9, 26, RAYWHITE);
-            DrawCenteredTextLine("ESC: Back   |   Click a row or use the arrows to change settings",
+            const Rectangle settingsRows[] = {resolutionRect, displayModeRect, monitorRect, targetFpsRect,
+                                               vsyncRect, fpsCounterRect, backRect};
+            if (controllerOwnsUi || (!CheckCollisionPointRec(settingsMouse, backRect) && !settingsClick)) {
+                DrawRectangleLinesEx(settingsRows[settingsSelection], 2.0f,
+                                     controllerOwnsUi ? YELLOW : Fade(SKYBLUE, 0.8f));
+            }
+            DrawCenteredTextLine("D-pad/Left Stick: navigate   A: select   Left/Right: adjust   Esc: Back",
                                  screenWidth / 2, settingsY + settingsH - 28, 18,
                                  Fade(RAYWHITE, 0.72f));
             EndDrawing();
@@ -2949,7 +3114,9 @@ int main() {
             float cardW = (setupW - 170.0f) / 2.0f;
             Rectangle hostRect = {static_cast<float>(setupX + 56), static_cast<float>(setupY + 166), cardW, 112.0f};
             Rectangle joinRect = {hostRect.x + cardW + 58.0f, static_cast<float>(setupY + 166), cardW, 112.0f};
-            Rectangle ipRect = {static_cast<float>(setupX + 56), static_cast<float>(setupY + 312), static_cast<float>(setupW - 112), 58.0f};
+            Rectangle ipRect = {static_cast<float>(setupX + 56), static_cast<float>(setupY + 312), static_cast<float>(setupW * 0.68f), 58.0f};
+            Rectangle portRect = {ipRect.x + ipRect.width + 22.0f, static_cast<float>(setupY + 312),
+                                  static_cast<float>(setupW - 134 - ipRect.width), 58.0f};
             Rectangle backRect = {static_cast<float>(setupX + setupW / 2 - 120), static_cast<float>(setupY + 438), 240.0f, 56.0f};
 
             Vector2 mousePos = GetMousePosition();
@@ -2957,15 +3124,19 @@ int main() {
             bool joinHover = CheckCollisionPointRec(mousePos, joinRect);
             bool backHover = CheckCollisionPointRec(mousePos, backRect);
             bool ipHover = CheckCollisionPointRec(mousePos, ipRect);
+            bool portHover = CheckCollisionPointRec(mousePos, portRect);
 
             if (!controllerOwnsUi) {
                 if (hostHover) onlineSetupSelection = 0;
                 else if (joinHover) onlineSetupSelection = 1;
-                else if (backHover) onlineSetupSelection = 2;
+                else if (ipHover) onlineSetupSelection = 2;
+                else if (portHover) onlineSetupSelection = 3;
+                else if (backHover) onlineSetupSelection = 4;
             }
 
             if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
                 onlineIpFocused = ipHover;
+                onlinePortFocused = portHover;
                 for (size_t i = 0; i < discoveredHosts.size() && i < 3; ++i) {
                     Rectangle hostIpRect = {
                         static_cast<float>(setupX + 220),
@@ -2976,38 +3147,42 @@ int main() {
                     if (CheckCollisionPointRec(mousePos, hostIpRect)) {
                         netJoinAddress = discoveredHosts[i];
                         onlineIpFocused = false;
+                        onlinePortFocused = false;
                         onlineSetupSelection = 1;
                     }
                 }
             }
 
-            if (IsKeyPressed(KEY_TAB)) {
-                onlineIpFocused = !onlineIpFocused;
+            if (!controllerOwnsUi && IsKeyPressed(KEY_TAB)) {
+                if (!onlineIpFocused && !onlinePortFocused) onlineIpFocused = true;
+                else if (onlineIpFocused) { onlineIpFocused = false; onlinePortFocused = true; }
+                else onlinePortFocused = false;
             }
 
-            if (onlineIpFocused) {
+            if ((onlineIpFocused || onlinePortFocused) && !controllerOwnsUi) {
                 int key = GetCharPressed();
                 while (key > 0) {
-                    if ((key >= '0' && key <= '9') || key == '.') {
-                        if (netJoinAddress.size() < 31) {
-                            netJoinAddress.push_back(static_cast<char>(key));
+                    if (onlineIpFocused && ((key >= '0' && key <= '9') || key == '.')) {
+                        if (netJoinAddress.size() < 31) netJoinAddress.push_back(static_cast<char>(key));
+                    } else if (onlinePortFocused && key >= '0' && key <= '9') {
+                        if (netJoinPort.size() < 5) netJoinPort.push_back(static_cast<char>(key));
                         }
-                    }
                     key = GetCharPressed();
                 }
-                if (IsKeyPressed(KEY_BACKSPACE) && !netJoinAddress.empty()) {
-                    netJoinAddress.pop_back();
+                if (IsKeyPressed(KEY_BACKSPACE)) {
+                    if (onlineIpFocused && !netJoinAddress.empty()) netJoinAddress.pop_back();
+                    if (onlinePortFocused && !netJoinPort.empty()) netJoinPort.pop_back();
                 }
             }
 
-            if (!onlineIpFocused) {
+            if (!onlineIpFocused && !onlinePortFocused) {
                 if (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_A) || IsKeyPressed(KEY_UP) || IsKeyPressed(KEY_W) ||
                     controllerMenuLeftPressed || controllerMenuUpPressed) {
-                    onlineSetupSelection = (onlineSetupSelection + 3 - 1) % 3;
+                    onlineSetupSelection = (onlineSetupSelection + 5 - 1) % 5;
                 }
                 if (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_D) || IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S) ||
                     controllerMenuRightPressed || controllerMenuDownPressed) {
-                    onlineSetupSelection = (onlineSetupSelection + 1) % 3;
+                    onlineSetupSelection = (onlineSetupSelection + 1) % 5;
                 }
             }
 
@@ -3040,17 +3215,30 @@ int main() {
                 }
             }
 
-            if (!onlineIpFocused && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER) ||
-                                     (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)))) {
+            bool openedIpKeyboardThisFrame = false;
+            const bool enterPressed = !controllerOwnsUi && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER));
+            if (!onlineIpFocused && !onlinePortFocused && (enterPressed || controllerConfirmPressed)) {
                 if (onlineSetupSelection == 0) {
                     startOnlineMode(NetRole::Host);
                 } else if (onlineSetupSelection == 1) {
                     startOnlineMode(NetRole::Client);
+                } else if (onlineSetupSelection == 2) {
+                    onlineIpFocused = true;
+                    openedIpKeyboardThisFrame = true;
+                } else if (onlineSetupSelection == 3) {
+                    onlinePortFocused = true;
+                    openedIpKeyboardThisFrame = true;
                 } else {
                     closeDiscoverySocket();
                     screenState = ScreenState::Intro;
                     netStatus.clear();
                 }
+            }
+
+            if (controllerBackPressed && !onlineIpFocused && !onlinePortFocused) {
+                closeDiscoverySocket();
+                screenState = ScreenState::Intro;
+                netStatus.clear();
             }
 
             if (IsKeyPressed(KEY_ESCAPE)) {
@@ -3066,21 +3254,28 @@ int main() {
 
             DrawCenteredTextLine("ONLINE MULTIPLAYER", centerX, setupY + 24, 52, RAYWHITE);
             DrawCenteredTextLine("Choose host/join, then launch", centerX, setupY + 92, 24, Fade(RAYWHITE, 0.92f));
-            DrawCenteredTextLine(TextFormat("This device LAN IP: %s", localIpAddress.c_str()), centerX, setupY + 126, 22, LIME);
+            DrawCenteredTextLine(TextFormat("This device LAN IP: %s (UDP 42069)", localIpAddress.c_str()), centerX, setupY + 126, 22, LIME);
             DrawText(TextFormat("Version %s", APP_VERSION), setupX + 24, setupY + 20, 18, Fade(RAYWHITE, 0.86f));
             DrawText(latestVersionLine.c_str(), setupX + 24, setupY + 42, 16, latestVersionColor);
             if (!multiplayerVersionNotice.empty()) {
                 DrawText(multiplayerVersionNotice.c_str(), setupX + 24, setupY + 62, 16, ORANGE);
             }
 
-            DrawMenuCard(hostRect, "Host Game", "Create lobby and wait for player", onlineSetupSelection == 0, hostHover, {255, 224, 85, 255});
-            DrawMenuCard(joinRect, "Join Game", "Connect to host IPv4 address", onlineSetupSelection == 1, joinHover, {173, 135, 255, 255});
+            DrawMenuCard(hostRect, "Host Game", "Host on UDP port 42069", onlineSetupSelection == 0, hostHover, {255, 224, 85, 255});
+            DrawMenuCard(joinRect, "Join Game", "Connect using IPv4 address and port", onlineSetupSelection == 1, joinHover, {173, 135, 255, 255});
 
-            DrawText("Host IP for joining:", setupX + 62, setupY + 284, 24, Fade(RAYWHITE, 0.90f));
+            DrawText("Host IP:", setupX + 62, setupY + 284, 24, Fade(RAYWHITE, 0.90f));
             DrawRectangleRounded(ipRect, 0.12f, 8, Fade({16, 44, 86, 255}, 0.86f));
-            DrawRectangleRoundedLines(ipRect, 0.12f, 8, onlineIpFocused ? YELLOW : Fade(RAYWHITE, 0.5f));
+            DrawRectangleRoundedLines(ipRect, 0.12f, 8,
+                                      (onlineIpFocused || (controllerOwnsUi && onlineSetupSelection == 2)) ? YELLOW : Fade(RAYWHITE, 0.5f));
             DrawText(netJoinAddress.c_str(), static_cast<int>(ipRect.x) + 18, static_cast<int>(ipRect.y) + 15, 30, RAYWHITE);
-            DrawText("Tip: click the field or press Tab to focus/unfocus", setupX + 62, setupY + 380, 20, Fade(RAYWHITE, 0.72f));
+            DrawText("Port to join:", static_cast<int>(portRect.x), setupY + 284, 24, Fade(RAYWHITE, 0.90f));
+            DrawRectangleRounded(portRect, 0.12f, 8, Fade({16, 44, 86, 255}, 0.86f));
+            DrawRectangleRoundedLines(portRect, 0.12f, 8,
+                                      (onlinePortFocused || (controllerOwnsUi && onlineSetupSelection == 3)) ? YELLOW : Fade(RAYWHITE, 0.5f));
+            DrawText(netJoinPort.c_str(), static_cast<int>(portRect.x) + 18, static_cast<int>(portRect.y) + 15, 30, RAYWHITE);
+            DrawText("Click a field or press Tab; controller: select IP/port and press A",
+                     setupX + 62, setupY + 380, 18, Fade(RAYWHITE, 0.72f));
             DrawText("LAN games found:", setupX + 62, setupY + 408, 18, Fade(RAYWHITE, 0.85f));
             if (discoveredHosts.empty()) {
                 DrawText("Searching...", setupX + 235, setupY + 408, 18, Fade(RAYWHITE, 0.65f));
@@ -3091,13 +3286,27 @@ int main() {
                 }
             }
 
-            DrawRectangleRounded(backRect, 0.24f, 8, (backHover || onlineSetupSelection == 2) ? Fade({220, 90, 90, 255}, 0.40f) : Fade({220, 90, 90, 255}, 0.22f));
-            DrawRectangleRoundedLines(backRect, 0.24f, 8, (onlineSetupSelection == 2) ? ORANGE : Fade(RAYWHITE, 0.5f));
+            DrawRectangleRounded(backRect, 0.24f, 8, (backHover || onlineSetupSelection == 4) ? Fade({220, 90, 90, 255}, 0.40f) : Fade({220, 90, 90, 255}, 0.22f));
+            DrawRectangleRoundedLines(backRect, 0.24f, 8, (onlineSetupSelection == 4) ? ORANGE : Fade(RAYWHITE, 0.5f));
             DrawCenteredTextLine("Back", static_cast<int>(backRect.x + backRect.width / 2), static_cast<int>(backRect.y) + 14, 30, RAYWHITE);
 
             DrawCenteredTextLine("D-pad/Left Stick + A or Enter: select   |   Esc: back", centerX, setupY + setupH - 34, 20, Fade(RAYWHITE, 0.84f));
             if (!netStatus.empty()) {
                 DrawCenteredTextLine(netStatus.c_str(), centerX, setupY + 126, 24, ORANGE);
+            }
+            if ((onlineIpFocused || onlinePortFocused) && controllerOwnsUi) {
+                Rectangle keyboardBounds = {static_cast<float>(std::max(12, screenWidth / 2 - 330)),
+                    static_cast<float>(std::max(12, screenHeight - 190)),
+                    static_cast<float>(std::min(660, screenWidth - 24)), 178.0f};
+                std::string& inputValue = onlinePortFocused ? netJoinPort : netJoinAddress;
+                const int keyboardResult = drawVirtualKeyboard(
+                    keyboardBounds, inputValue, true, onlinePortFocused ? 5 : 31, onlineKeyboardSelection,
+                    !openedIpKeyboardThisFrame && controllerConfirmPressed, controllerBackPressed,
+                    controllerMapped && controllerOwnsUi && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_LEFT));
+                if (keyboardResult != 0) {
+                    onlineIpFocused = false;
+                    onlinePortFocused = false;
+                }
             }
             EndDrawing();
             continue;
@@ -3138,6 +3347,17 @@ int main() {
                               CheckCollisionPointRec(lobbyMouse, startRect);
             bool backClick = IsMouseButtonPressed(MOUSE_BUTTON_LEFT) &&
                              CheckCollisionPointRec(lobbyMouse, backRect);
+            if (!controllerOwnsUi) {
+                if (CheckCollisionPointRec(lobbyMouse, readyRect)) lobbySelection = 0;
+                else if (CheckCollisionPointRec(lobbyMouse, startRect)) lobbySelection = 1;
+                else if (CheckCollisionPointRec(lobbyMouse, backRect)) lobbySelection = 2;
+            }
+            if (controllerMenuUpPressed || (!controllerOwnsUi && IsKeyPressed(KEY_UP))) {
+                lobbySelection = (lobbySelection + 2) % 3;
+            }
+            if (controllerMenuDownPressed || (!controllerOwnsUi && IsKeyPressed(KEY_DOWN))) {
+                lobbySelection = (lobbySelection + 1) % 3;
+            }
 #ifdef PLATFORM_ANDROID
             static bool lobbyTouchWasDown = false;
             bool lobbyTouchDown = GetTouchPointCount() > 0;
@@ -3150,17 +3370,20 @@ int main() {
             lobbyTouchWasDown = lobbyTouchDown;
 #endif
 
-            if (backClick || IsKeyPressed(KEY_ESCAPE)) {
+            if (backClick || (!controllerOwnsUi && IsKeyPressed(KEY_ESCAPE)) ||
+                controllerBackPressed || (controllerConfirmPressed && lobbySelection == 2)) {
                 closeNetwork();
                 resetGame();
                 screenState = ScreenState::Intro;
                 continue;
             }
-            if (readyClick || IsKeyPressed(KEY_R)) {
+            if (readyClick || (!controllerOwnsUi && IsKeyPressed(KEY_R)) ||
+                (controllerConfirmPressed && lobbySelection == 0)) {
                 localReady = !localReady;
                 sendLobbyState();
             }
-            if (netRole == NetRole::Host && (startClick || IsKeyPressed(KEY_ENTER)) &&
+            if (netRole == NetRole::Host && (startClick || (!controllerOwnsUi && IsKeyPressed(KEY_ENTER)) ||
+                (controllerConfirmPressed && lobbySelection == 1)) &&
                 netHasPeer && localReady && remoteReady) {
                 onlineGameStarted = true;
                 screenState = ScreenState::Playing;
@@ -3201,15 +3424,15 @@ int main() {
                                  screenWidth / 2, lobbyY + 275, 20, Fade(RAYWHITE, 0.75f));
 
             Color readyColor = localReady ? GREEN : SKYBLUE;
-            DrawRectangleRounded(readyRect, 0.2f, 8, Fade(readyColor, 0.35f));
-            DrawRectangleRoundedLines(readyRect, 0.2f, 8, readyColor);
+            DrawRectangleRounded(readyRect, 0.2f, 8, Fade(readyColor, (lobbySelection == 0) ? 0.55f : 0.35f));
+            DrawRectangleRoundedLines(readyRect, 0.2f, 8, (controllerOwnsUi && lobbySelection == 0) ? YELLOW : readyColor);
             DrawCenteredTextLine(localReady ? "UNREADY  (R)" : "READY UP  (R)",
                                  screenWidth / 2, static_cast<int>(readyRect.y) + 16, 28, RAYWHITE);
 
             if (netRole == NetRole::Host) {
                 bool canStart = netHasPeer && localReady && remoteReady;
-                DrawRectangleRounded(startRect, 0.2f, 8, Fade(canStart ? ORANGE : GRAY, 0.35f));
-                DrawRectangleRoundedLines(startRect, 0.2f, 8, canStart ? ORANGE : GRAY);
+                DrawRectangleRounded(startRect, 0.2f, 8, Fade(canStart ? ORANGE : GRAY, (lobbySelection == 1) ? 0.55f : 0.35f));
+                DrawRectangleRoundedLines(startRect, 0.2f, 8, (controllerOwnsUi && lobbySelection == 1) ? YELLOW : (canStart ? ORANGE : GRAY));
                 DrawCenteredTextLine(canStart ? "START GAME  (Enter)" : "START GAME (waiting for both ready)",
                                      screenWidth / 2, static_cast<int>(startRect.y) + 16, 24,
                                      canStart ? RAYWHITE : Fade(RAYWHITE, 0.55f));
@@ -3222,8 +3445,8 @@ int main() {
             continue;
         }
 
-        if (!dead && (IsKeyPressed(KEY_ESCAPE) ||
-            (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)))) {
+        if (!dead && ((!controllerOwnsUi && IsKeyPressed(KEY_ESCAPE)) ||
+            (controllerOwnsUi && controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)))) {
             paused = !paused;
             pauseSelection = 0;
             if (paused) {
@@ -3360,7 +3583,7 @@ int main() {
                 }
             }
 
-            if (IsKeyPressed(KEY_ENTER) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN))) {
+            if ((!controllerOwnsUi && IsKeyPressed(KEY_ENTER)) || controllerConfirmPressed) {
                 triggerPauseAction(pauseSelection);
             }
         }
@@ -3370,10 +3593,15 @@ int main() {
             // Keep touch state updated while dead so restart/menu buttons are interactive.
             updateTouchControls();
 #endif
+            Rectangle deathRestartRect = {static_cast<float>(screenWidth / 2 - 180),
+                static_cast<float>(screenHeight / 2 + 30), 360.0f, 38.0f};
+            Rectangle deathMenuRect = {static_cast<float>(screenWidth / 2 - 180),
+                static_cast<float>(screenHeight / 2 + 68), 360.0f, 38.0f};
             if (!highscoreSubmittedThisRun && scoreQualifiesForHighscore(score)) {
                 if (!enteringInitials) {
                     enteringInitials = true;
                     pendingInitials.clear();
+                    initialsKeyboardDismissed = false;
                 }
 
 #ifdef PLATFORM_ANDROID
@@ -3397,8 +3625,13 @@ int main() {
                     }
                 }
 
+                if (highscoreKeyboardVisible && controllerOwnsUi) {
+                    SetAndroidSoftKeyboardVisible(false);
+                    highscoreKeyboardVisible = false;
+                }
+
                 // Poll keyboard input from Java EditText bridge
-                if (highscoreKeyboardVisible) {
+                if (highscoreKeyboardVisible && !controllerOwnsUi) {
                     std::string androidInput = GetAndroidKeyboardInput();
                     for (char c : androidInput) {
                         if (c >= 'a' && c <= 'z') c = c - 'a' + 'A';
@@ -3412,43 +3645,40 @@ int main() {
                 }
 #endif
 
-                int key = GetCharPressed();
-                while (key > 0) {
-                    if (key >= 'a' && key <= 'z') key = key - 'a' + 'A';
-                    if (key >= 'A' && key <= 'Z') {
-                        pendingInitials.push_back(static_cast<char>(key));
-                        if (pendingInitials.size() > 3) {
-                            pendingInitials.erase(pendingInitials.begin());
+                if (!controllerOwnsUi) {
+                    int key = GetCharPressed();
+                    while (key > 0) {
+                        if (key >= 'a' && key <= 'z') key = key - 'a' + 'A';
+                        if (key >= 'A' && key <= 'Z') {
+                            pendingInitials.push_back(static_cast<char>(key));
+                            if (pendingInitials.size() > 3) {
+                                pendingInitials.erase(pendingInitials.begin());
+                            }
                         }
+                        key = GetCharPressed();
                     }
-                    key = GetCharPressed();
-                }
 
-                int keyPressed = GetKeyPressed();
-                while (keyPressed > 0) {
-                    if (keyPressed >= KEY_A && keyPressed <= KEY_Z) {
-                        char letter = static_cast<char>('A' + (keyPressed - KEY_A));
-                        pendingInitials.push_back(letter);
-                        if (pendingInitials.size() > 3) {
-                            pendingInitials.erase(pendingInitials.begin());
+                    int keyPressed = GetKeyPressed();
+                    while (keyPressed > 0) {
+                        if (keyPressed >= KEY_A && keyPressed <= KEY_Z) {
+                            char letter = static_cast<char>('A' + (keyPressed - KEY_A));
+                            pendingInitials.push_back(letter);
+                            if (pendingInitials.size() > 3) {
+                                pendingInitials.erase(pendingInitials.begin());
+                            }
+                        } else if (keyPressed == KEY_BACKSPACE && !pendingInitials.empty()) {
+                            pendingInitials.pop_back();
+                        } else if (keyPressed == KEY_ENTER || keyPressed == KEY_KP_ENTER) {
+                            submitHighscore();
                         }
-                    } else if (keyPressed == KEY_BACKSPACE && !pendingInitials.empty()) {
-                        pendingInitials.pop_back();
-                    } else if (keyPressed == KEY_ENTER || keyPressed == KEY_KP_ENTER) {
-                        submitHighscore();
+                        keyPressed = GetKeyPressed();
                     }
-                    keyPressed = GetKeyPressed();
-                }
 
-                if (IsKeyPressed(KEY_BACKSPACE) && !pendingInitials.empty()) {
-                    pendingInitials.pop_back();
+                    if (IsKeyPressed(KEY_BACKSPACE) && !pendingInitials.empty()) pendingInitials.pop_back();
+                    if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) submitHighscore();
                 }
                 if (pendingInitials.size() > 3) {
                     pendingInitials = pendingInitials.substr(pendingInitials.size() - 3);
-                }
-
-                if (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)) {
-                    submitHighscore();
                 }
 
 #ifdef PLATFORM_ANDROID
@@ -3484,15 +3714,26 @@ int main() {
                 enteringInitials = false;
             }
 
-            if (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN) && !enteringInitials) {
+            if (controllerConfirmPressed && !enteringInitials) {
                 resetGame();
             }
-            if (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
+            if (controllerBackPressed && !enteringInitials) {
                 closeNetwork();
                 resetGame();
                 screenState = ScreenState::Intro;
                 EnableCursor();
                 ShowCursor();
+            }
+            if (!enteringInitials && IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+                Vector2 deathMouse = GetMousePosition();
+                if (CheckCollisionPointRec(deathMouse, deathRestartRect)) resetGame();
+                else if (CheckCollisionPointRec(deathMouse, deathMenuRect)) {
+                    closeNetwork();
+                    resetGame();
+                    screenState = ScreenState::Intro;
+                    EnableCursor();
+                    ShowCursor();
+                }
             }
 
             if (IsKeyPressed(KEY_R)) {
@@ -3685,6 +3926,17 @@ int main() {
                 }
             }
 #endif
+
+            if (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_LEFT) && !shopOpen) {
+                inventoryOpen = !inventoryOpen;
+                if (inventoryOpen) EnableCursor();
+                else {
+#ifndef PLATFORM_ANDROID
+                    DisableCursor();
+#endif
+                    inventorySwapFrom = -1;
+                }
+            }
 
             if (playerHealth > 0.0f || onlineClient) {
                 float moveSpeed = 7.0f;
@@ -4929,11 +5181,21 @@ int main() {
             bool grenadeHover = CheckCollisionPointRec(mp, grenadeBtn);
             bool shieldHover = CheckCollisionPointRec(mp, shieldBtn);
             bool scytheHover = CheckCollisionPointRec(mp, scytheBtn);
+            if (!controllerOwnsUi) {
+                if (fireRateHover) shopSelection = 0;
+                else if (shotgunHover) shopSelection = 1;
+                else if (grenadeHover) shopSelection = 2;
+                else if (shieldHover) shopSelection = 3;
+                else if (scytheHover) shopSelection = 4;
+            }
+            if (controllerMenuUpPressed || (!controllerOwnsUi && IsKeyPressed(KEY_UP))) shopSelection = (shopSelection + 4) % 5;
+            if (controllerMenuDownPressed || (!controllerOwnsUi && IsKeyPressed(KEY_DOWN))) shopSelection = (shopSelection + 1) % 5;
+            if (controllerBackPressed || (!controllerOwnsUi && IsKeyPressed(KEY_ESCAPE))) shopOpen = false;
 
             // Fire rate upgrade
             bool canBuyFireRate = (chickenNuggets >= 25);
             DrawRectangleRounded(fireRateBtn, 0.2f, 8, fireRateHover ? Fade(GREEN, 0.4f) : Fade(GREEN, 0.2f));
-            DrawRectangleRoundedLines(fireRateBtn, 0.2f, 8, canBuyFireRate ? GREEN : GRAY);
+            DrawRectangleRoundedLines(fireRateBtn, 0.2f, 8, (controllerOwnsUi && shopSelection == 0) ? YELLOW : (canBuyFireRate ? GREEN : GRAY));
             DrawText(TextFormat("Upgrade Fire Rate +10%% [25 nuggets] (Level %i)", fireRateUpgradeCount), shopX + 42, shopY + 142, 22, canBuyFireRate ? RAYWHITE : Fade(RAYWHITE, 0.5f));
 
             // Shotgun
@@ -4941,7 +5203,7 @@ int main() {
             bool canBuyShotgun = (!ownsShotgun && chickenNuggets >= 50);
             Color sgColor = ownsShotgun ? GRAY : ORANGE;
             DrawRectangleRounded(shotgunBtn, 0.2f, 8, shotgunHover ? Fade(sgColor, 0.4f) : Fade(sgColor, 0.2f));
-            DrawRectangleRoundedLines(shotgunBtn, 0.2f, 8, canBuyShotgun ? ORANGE : GRAY);
+            DrawRectangleRoundedLines(shotgunBtn, 0.2f, 8, (controllerOwnsUi && shopSelection == 1) ? YELLOW : (canBuyShotgun ? ORANGE : GRAY));
             DrawText(ownsShotgun ? "Potato Shotgun [OWNED]" : "Potato Shotgun [50 nuggets]", shopX + 42, shopY + 207, 22, (ownsShotgun || canBuyShotgun) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
 
             // Grenade launcher
@@ -4949,14 +5211,14 @@ int main() {
             bool canBuyGrenade = (!ownsGrenade && chickenNuggets >= 50);
             Color grColor = ownsGrenade ? GRAY : SKYBLUE;
             DrawRectangleRounded(grenadeBtn, 0.2f, 8, grenadeHover ? Fade(grColor, 0.4f) : Fade(grColor, 0.2f));
-            DrawRectangleRoundedLines(grenadeBtn, 0.2f, 8, canBuyGrenade ? SKYBLUE : GRAY);
+            DrawRectangleRoundedLines(grenadeBtn, 0.2f, 8, (controllerOwnsUi && shopSelection == 2) ? YELLOW : (canBuyGrenade ? SKYBLUE : GRAY));
             DrawText(ownsGrenade ? "Potato Grenade Launcher [OWNED]" : "Potato Grenade Launcher [50 nuggets]", shopX + 42, shopY + 272, 22, (ownsGrenade || canBuyGrenade) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
 
             // Shield (consumable)
             bool canBuyShield = (!hasShieldCharge && !shieldActive && chickenNuggets >= 40);
             Color shColor = (hasShieldCharge || shieldActive) ? GRAY : VIOLET;
             DrawRectangleRounded(shieldBtn, 0.2f, 8, shieldHover ? Fade(shColor, 0.4f) : Fade(shColor, 0.2f));
-            DrawRectangleRoundedLines(shieldBtn, 0.2f, 8, canBuyShield ? VIOLET : GRAY);
+            DrawRectangleRoundedLines(shieldBtn, 0.2f, 8, (controllerOwnsUi && shopSelection == 3) ? YELLOW : (canBuyShield ? VIOLET : GRAY));
             const char* shieldLabel = shieldActive
                                           ? "Shield [ACTIVE 10s]"
                                           : (hasShieldCharge ? "Shield [READY: Press Q]" : "Shield [40 nuggets] (One-use, 10s)");
@@ -4966,7 +5228,7 @@ int main() {
             bool canBuyScythe = (!ownsScythe && chickenNuggets >= 75);
             Color scColor = ownsScythe ? GRAY : RED;
             DrawRectangleRounded(scytheBtn, 0.2f, 8, scytheHover ? Fade(scColor, 0.4f) : Fade(scColor, 0.2f));
-            DrawRectangleRoundedLines(scytheBtn, 0.2f, 8, canBuyScythe ? RED : GRAY);
+            DrawRectangleRoundedLines(scytheBtn, 0.2f, 8, (controllerOwnsUi && shopSelection == 4) ? YELLOW : (canBuyScythe ? RED : GRAY));
             DrawText(ownsScythe ? "Potato Scythe [OWNED]" : "Potato Scythe [75 nuggets]", shopX + 42, shopY + 402, 22, (ownsScythe || canBuyScythe) ? RAYWHITE : Fade(RAYWHITE, 0.5f));
 
             // Handle purchases
@@ -5000,8 +5262,20 @@ int main() {
                 }
             }
 
-            DrawCenteredTextLine("Click to buy  |  Shop closes automatically", screenWidth / 2, shopY + shopH - 50, 20, Fade(RAYWHITE, 0.6f));
-            DrawCenteredTextLine("Press 1/2/3 weapons, Q shield, F scythe", screenWidth / 2, shopY + shopH - 28, 18, Fade(RAYWHITE, 0.5f));
+            const bool shopConfirm = controllerConfirmPressed ||
+                (!controllerOwnsUi && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)));
+            if (shopConfirm) {
+                const bool canPurchase = (shopSelection == 0 && canBuyFireRate) ||
+                    (shopSelection == 1 && canBuyShotgun) || (shopSelection == 2 && canBuyGrenade) ||
+                    (shopSelection == 3 && canBuyShield) || (shopSelection == 4 && canBuyScythe);
+                if (canPurchase) {
+                    if (netRole == NetRole::Client) sendShopPurchase(shopSelection);
+                    else applyShopPurchase(shopSelection);
+                }
+            }
+
+            DrawCenteredTextLine("D-pad/Left Stick: select   A/Enter: buy   B/Esc: close", screenWidth / 2, shopY + shopH - 50, 20, Fade(RAYWHITE, 0.6f));
+            DrawCenteredTextLine("Shop closes automatically when the timer ends", screenWidth / 2, shopY + shopH - 28, 18, Fade(RAYWHITE, 0.5f));
         }
 
         // Inventory screen
@@ -5014,11 +5288,33 @@ int main() {
 
             DrawRectangle(invX, invY, invW, invH, Fade({10, 15, 25, 255}, 0.92f));
             DrawRectangleLinesEx({static_cast<float>(invX), static_cast<float>(invY), static_cast<float>(invW), static_cast<float>(invH)}, 3, SKYBLUE);
-            DrawCenteredTextLine("INVENTORY  (Press E to close)", screenWidth / 2, invY + 12, 28, SKYBLUE);
-            DrawCenteredTextLine("Click a slot to select, then click another to swap", screenWidth / 2, invY + 46, 18, Fade(RAYWHITE, 0.6f));
+            DrawCenteredTextLine("INVENTORY  (E/B to close)", screenWidth / 2, invY + 12, 28, SKYBLUE);
+            DrawCenteredTextLine("D-pad/Left Stick: select   A/Enter: mark and swap   B/Esc: close", screenWidth / 2, invY + 46, 18, Fade(RAYWHITE, 0.6f));
 
             const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade Launcher"};
             Vector2 mp = GetMousePosition();
+            if (!controllerOwnsUi) {
+                for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
+                    Rectangle slotRect = {static_cast<float>(invX + 20 + i * 160), static_cast<float>(invY + 80), 145.0f, 170.0f};
+                    if (CheckCollisionPointRec(mp, slotRect)) inventorySelection = i;
+                }
+            }
+            if (controllerMenuLeftPressed || controllerMenuUpPressed ||
+                (!controllerOwnsUi && (IsKeyPressed(KEY_LEFT) || IsKeyPressed(KEY_UP)))) {
+                inventorySelection = (inventorySelection + MAX_INVENTORY_SLOTS - 1) % MAX_INVENTORY_SLOTS;
+            }
+            if (controllerMenuRightPressed || controllerMenuDownPressed ||
+                (!controllerOwnsUi && (IsKeyPressed(KEY_RIGHT) || IsKeyPressed(KEY_DOWN)))) {
+                inventorySelection = (inventorySelection + 1) % MAX_INVENTORY_SLOTS;
+            }
+            if (controllerBackPressed || (!controllerOwnsUi && IsKeyPressed(KEY_ESCAPE))) inventoryOpen = false;
+            if (controllerConfirmPressed || (!controllerOwnsUi && (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_KP_ENTER)))) {
+                if (inventorySwapFrom < 0) inventorySwapFrom = inventorySelection;
+                else {
+                    std::swap(inventory[inventorySelection], inventory[inventorySwapFrom]);
+                    inventorySwapFrom = -1;
+                }
+            }
 
             for (int i = 0; i < MAX_INVENTORY_SLOTS; ++i) {
                 float slotX = static_cast<float>(invX) + 20.0f + i * 160.0f;
@@ -5029,7 +5325,9 @@ int main() {
                 bool selected = (i == currentWeaponSlot);
                 bool isSwapSource = (i == inventorySwapFrom);
 
-                Color borderColor = isSwapSource ? GREEN : (selected ? YELLOW : (hover ? SKYBLUE : Fade(RAYWHITE, 0.4f)));
+                Color borderColor = isSwapSource ? GREEN :
+                    ((controllerOwnsUi && i == inventorySelection) ? ORANGE :
+                     (selected ? YELLOW : (hover ? SKYBLUE : Fade(RAYWHITE, 0.4f))));
                 DrawRectangleRounded(slotRect, 0.12f, 8, Fade({20, 30, 50, 255}, 0.9f));
                 DrawRectangleRoundedLines(slotRect, 0.12f, 8, borderColor);
 
@@ -5104,11 +5402,28 @@ int main() {
                     DrawText("Type your initials (3 letters):", screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
                 }
 #else
-                DrawText("Enter Your Initials (3 letters):", screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
+                DrawText(controllerOwnsUi ? "A: type initials   B: delete" : "Enter Your Initials (3 letters):",
+                         screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
 #endif
                 std::string displayInitials = pendingInitials;
                 while (displayInitials.size() < 3) displayInitials.push_back('_');
                 DrawText(displayInitials.c_str(), screenWidth / 2 - 60, screenHeight / 2 + 82, 36, SKYBLUE);
+                bool openedInitialsKeyboardThisFrame = false;
+                if (controllerOwnsUi && initialsKeyboardDismissed && controllerConfirmPressed) {
+                    initialsKeyboardDismissed = false;
+                    openedInitialsKeyboardThisFrame = true;
+                }
+                if (controllerOwnsUi && !initialsKeyboardDismissed) {
+                    Rectangle keyboardBounds = {static_cast<float>(std::max(12, screenWidth / 2 - 350)),
+                        static_cast<float>(std::max(12, screenHeight - 292)),
+                        static_cast<float>(std::min(700, screenWidth - 24)), 274.0f};
+                    const int keyboardResult = drawVirtualKeyboard(
+                        keyboardBounds, pendingInitials, false, 3, initialsKeyboardSelection,
+                        !openedInitialsKeyboardThisFrame && controllerConfirmPressed, controllerBackPressed,
+                        controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_LEFT));
+                    if (keyboardResult == 1) submitHighscore();
+                    else if (keyboardResult == -1) initialsKeyboardDismissed = true;
+                }
 #ifdef PLATFORM_ANDROID
                 if (highscoreKeyboardVisible) {
                     Rectangle submitBtnRect = {
@@ -5129,6 +5444,12 @@ int main() {
                 DrawText("Press ENTER to submit", screenWidth / 2 - 130, screenHeight / 2 + 130, 20, ORANGE);
 #endif
             } else {
+                Rectangle deathRestartRect = {static_cast<float>(screenWidth / 2 - 180),
+                    static_cast<float>(screenHeight / 2 + 30), 360.0f, 38.0f};
+                Rectangle deathMenuRect = {static_cast<float>(screenWidth / 2 - 180),
+                    static_cast<float>(screenHeight / 2 + 68), 360.0f, 38.0f};
+                DrawRectangleRoundedLines(deathRestartRect, 0.18f, 6, Fade(YELLOW, 0.75f));
+                DrawRectangleRoundedLines(deathMenuRect, 0.18f, 6, Fade(RAYWHITE, 0.5f));
                 DrawText(controllerMapped ? "A: restart" : "Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
                 DrawText(controllerMapped ? "B: main menu" : "Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
             }
