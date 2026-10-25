@@ -2934,10 +2934,18 @@ int main() {
 
             DrawCenteredTextLine("CHICKEN POTATO FPS", centerX, introY + 28, 54, RAYWHITE);
             DrawCenteredTextLine("Pick a mode to deploy your potato cannon", centerX, introY + 92, 25, Fade(RAYWHITE, 0.92f));
-            DrawText(TextFormat("Version %s", APP_VERSION), introX + 24, introY + 24, 20, Fade(RAYWHITE, 0.86f));
-            DrawText(latestVersionLine.c_str(), introX + 24, introY + 52, 18, latestVersionColor);
+            const char* versionText = TextFormat("Version %s", APP_VERSION);
+            const int versionTextSize = 16;
+            const int versionInfoRight = introX + introW - 24;
+            DrawText(versionText, versionInfoRight - MeasureText(versionText, versionTextSize),
+                     introY + introH - 54, versionTextSize, Fade(RAYWHITE, 0.86f));
+            DrawText(latestVersionLine.c_str(),
+                     versionInfoRight - MeasureText(latestVersionLine.c_str(), 15),
+                     introY + introH - 74, 15, latestVersionColor);
             if (!multiplayerVersionNotice.empty()) {
-                DrawText(multiplayerVersionNotice.c_str(), introX + 24, introY + 76, 18, ORANGE);
+                DrawText(multiplayerVersionNotice.c_str(),
+                         versionInfoRight - MeasureText(multiplayerVersionNotice.c_str(), 14),
+                         introY + introH - 94, 14, ORANGE);
             }
 
             DrawMenuCard(singleRect, "Singleplayer", "Solo survival against endless chickens", introSelection == 0, singleHover, {255, 224, 85, 255});
