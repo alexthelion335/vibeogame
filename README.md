@@ -82,6 +82,14 @@ cmake --build build
 - `R` - restart when dead
 - `Esc` - pause menu
 
+### Controller controls
+
+- `Left Stick` - move
+- `Right Stick` - look
+- `A` / bottom face button - jump
+- `Right Trigger` (or `B` / right face button) - fire
+- `Left Trigger` or `Left Stick Click` - sprint
+
 ### Start menu modes
 
 - `Singleplayer`

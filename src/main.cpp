@@ -15,6 +15,12 @@
 #include <string>
 #include <vector>
 
+// raylib's desktop GLFW backend treats any present joystick as "available";
+// query GLFW directly to distinguish a mapped gamepad from an unmapped joystick.
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+    #include <GLFW/glfw3.h>
+#endif
+
 #ifdef HAS_CURL
     #include <curl/curl.h>
 #endif
@@ -2100,6 +2106,155 @@ int main() {
         screenWidth = GetScreenWidth();
         screenHeight = GetScreenHeight();
         const float dt = GetFrameTime();
+        bool controllerConnected = false;
+        bool controllerMapped = false;
+        int activeGamepad = -1;
+        for (int gamepad = 0; gamepad < 4; ++gamepad) {
+            if (!IsGamepadAvailable(gamepad)) continue;
+            controllerConnected = true;
+            if (activeGamepad < 0) activeGamepad = gamepad;
+            // raylib's axis count is fixed for any present joystick, so it cannot
+            // tell us whether GLFW actually mapped this device's controls.
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+            if (glfwJoystickIsGamepad(gamepad)) {
+                activeGamepad = gamepad;
+                controllerMapped = true;
+                break;
+            }
+#else
+            if (GetGamepadAxisCount(gamepad) >= 4) {
+                activeGamepad = gamepad;
+                controllerMapped = true;
+                break;
+            }
+#endif
+        }
+        const char* activeGamepadName = controllerConnected ? GetGamepadName(activeGamepad) : nullptr;
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+        const char* activeGamepadGuid = controllerConnected ? glfwGetJoystickGUID(activeGamepad) : nullptr;
+        GLFWgamepadstate glfwPadState{};
+        const bool glfwPadStateValid = controllerMapped && glfwGetGamepadState(activeGamepad, &glfwPadState);
+        int glfwRawAxisCount = 0;
+        int glfwRawButtonCount = 0;
+        const float* glfwRawAxes = controllerConnected ? glfwGetJoystickAxes(activeGamepad, &glfwRawAxisCount) : nullptr;
+        const unsigned char* glfwRawButtons = controllerConnected ? glfwGetJoystickButtons(activeGamepad, &glfwRawButtonCount) : nullptr;
+        static GLFWgamepadstate previousGlfwPadState{};
+        static int previousGlfwPadId = -1;
+        GLFWgamepadstate lastGlfwPadState = previousGlfwPadId == activeGamepad ? previousGlfwPadState : GLFWgamepadstate{};
+        if (glfwPadStateValid) {
+            previousGlfwPadState = glfwPadState;
+            previousGlfwPadId = activeGamepad;
+        } else {
+            previousGlfwPadState = {};
+            previousGlfwPadId = -1;
+        }
+#else
+        const char* activeGamepadGuid = nullptr;
+        const bool glfwPadStateValid = false;
+        int glfwRawAxisCount = 0;
+        int glfwRawButtonCount = 0;
+        const float* glfwRawAxes = nullptr;
+        const unsigned char* glfwRawButtons = nullptr;
+#endif
+        auto controllerAxis = [&](int axis) -> float {
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+            return glfwPadStateValid && axis >= 0 && axis <= GLFW_GAMEPAD_AXIS_LAST
+                ? glfwPadState.axes[axis] : 0.0f;
+#else
+            return controllerMapped ? GetGamepadAxisMovement(activeGamepad, axis) : 0.0f;
+#endif
+        };
+        auto controllerButtonDown = [&](int button) -> bool {
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+            if (!glfwPadStateValid) return false;
+            int glfwButton = -1;
+            switch (button) {
+                case GAMEPAD_BUTTON_RIGHT_FACE_UP: glfwButton = GLFW_GAMEPAD_BUTTON_Y; break;
+                case GAMEPAD_BUTTON_RIGHT_FACE_RIGHT: glfwButton = GLFW_GAMEPAD_BUTTON_B; break;
+                case GAMEPAD_BUTTON_RIGHT_FACE_DOWN: glfwButton = GLFW_GAMEPAD_BUTTON_A; break;
+                case GAMEPAD_BUTTON_RIGHT_FACE_LEFT: glfwButton = GLFW_GAMEPAD_BUTTON_X; break;
+                case GAMEPAD_BUTTON_LEFT_TRIGGER_1: glfwButton = GLFW_GAMEPAD_BUTTON_LEFT_BUMPER; break;
+                case GAMEPAD_BUTTON_RIGHT_TRIGGER_1: glfwButton = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER; break;
+                case GAMEPAD_BUTTON_MIDDLE_LEFT: glfwButton = GLFW_GAMEPAD_BUTTON_BACK; break;
+                case GAMEPAD_BUTTON_MIDDLE_RIGHT: glfwButton = GLFW_GAMEPAD_BUTTON_START; break;
+                case GAMEPAD_BUTTON_LEFT_THUMB: glfwButton = GLFW_GAMEPAD_BUTTON_LEFT_THUMB; break;
+                case GAMEPAD_BUTTON_RIGHT_THUMB: glfwButton = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_UP: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_UP; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_RIGHT: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_RIGHT; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_DOWN: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_DOWN; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_LEFT: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_LEFT; break;
+                case GAMEPAD_BUTTON_LEFT_TRIGGER_2: return controllerAxis(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER) > 0.1f;
+                case GAMEPAD_BUTTON_RIGHT_TRIGGER_2: return controllerAxis(GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.1f;
+                default: break;
+            }
+            return glfwButton >= 0 && glfwPadState.buttons[glfwButton] == GLFW_PRESS;
+#else
+            return controllerMapped && IsGamepadButtonDown(activeGamepad, button);
+#endif
+        };
+        auto controllerButtonPressed = [&](int button) -> bool {
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+            if (!glfwPadStateValid) return false;
+            int glfwButton = -1;
+            switch (button) {
+                case GAMEPAD_BUTTON_RIGHT_FACE_UP: glfwButton = GLFW_GAMEPAD_BUTTON_Y; break;
+                case GAMEPAD_BUTTON_RIGHT_FACE_RIGHT: glfwButton = GLFW_GAMEPAD_BUTTON_B; break;
+                case GAMEPAD_BUTTON_RIGHT_FACE_DOWN: glfwButton = GLFW_GAMEPAD_BUTTON_A; break;
+                case GAMEPAD_BUTTON_RIGHT_FACE_LEFT: glfwButton = GLFW_GAMEPAD_BUTTON_X; break;
+                case GAMEPAD_BUTTON_LEFT_TRIGGER_1: glfwButton = GLFW_GAMEPAD_BUTTON_LEFT_BUMPER; break;
+                case GAMEPAD_BUTTON_RIGHT_TRIGGER_1: glfwButton = GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER; break;
+                case GAMEPAD_BUTTON_MIDDLE_LEFT: glfwButton = GLFW_GAMEPAD_BUTTON_BACK; break;
+                case GAMEPAD_BUTTON_MIDDLE_RIGHT: glfwButton = GLFW_GAMEPAD_BUTTON_START; break;
+                case GAMEPAD_BUTTON_LEFT_THUMB: glfwButton = GLFW_GAMEPAD_BUTTON_LEFT_THUMB; break;
+                case GAMEPAD_BUTTON_RIGHT_THUMB: glfwButton = GLFW_GAMEPAD_BUTTON_RIGHT_THUMB; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_UP: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_UP; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_RIGHT: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_RIGHT; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_DOWN: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_DOWN; break;
+                case GAMEPAD_BUTTON_LEFT_FACE_LEFT: glfwButton = GLFW_GAMEPAD_BUTTON_DPAD_LEFT; break;
+                case GAMEPAD_BUTTON_LEFT_TRIGGER_2:
+                    return controllerAxis(GLFW_GAMEPAD_AXIS_LEFT_TRIGGER) > 0.1f && lastGlfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] <= 0.1f;
+                case GAMEPAD_BUTTON_RIGHT_TRIGGER_2:
+                    return controllerAxis(GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.1f && lastGlfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] <= 0.1f;
+                default: break;
+            }
+            return glfwButton >= 0 && glfwPadState.buttons[glfwButton] == GLFW_PRESS && lastGlfwPadState.buttons[glfwButton] != GLFW_PRESS;
+#else
+            return controllerMapped && IsGamepadButtonPressed(activeGamepad, button);
+#endif
+        };
+        static bool previousControllerConnected = false;
+        static int previousControllerId = -1;
+        if (controllerConnected != previousControllerConnected ||
+            (controllerConnected && activeGamepad != previousControllerId)) {
+            TraceLog(LOG_INFO, "Gamepad %s: %s (GLFW mapping: %s)",
+                     controllerConnected ? "connected" : "disconnected",
+                     controllerConnected && activeGamepadName ? activeGamepadName : "none",
+                     controllerMapped ? "available" : "unavailable");
+            previousControllerConnected = controllerConnected;
+            previousControllerId = controllerConnected ? activeGamepad : -1;
+        }
+        float debugLeftX = controllerMapped ? controllerAxis(GAMEPAD_AXIS_LEFT_X) : 0.0f;
+        float debugLeftY = controllerMapped ? controllerAxis(GAMEPAD_AXIS_LEFT_Y) : 0.0f;
+        float debugRightX = controllerMapped ? controllerAxis(GAMEPAD_AXIS_RIGHT_X) : 0.0f;
+        float debugRightY = controllerMapped ? controllerAxis(GAMEPAD_AXIS_RIGHT_Y) : 0.0f;
+        bool debugButtonDown = controllerMapped && (
+            controllerButtonDown(GAMEPAD_BUTTON_RIGHT_FACE_DOWN) ||
+            controllerButtonDown(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT) ||
+            controllerButtonDown(GAMEPAD_BUTTON_MIDDLE_RIGHT) ||
+            controllerButtonDown(GAMEPAD_BUTTON_LEFT_FACE_UP) ||
+            controllerButtonDown(GAMEPAD_BUTTON_LEFT_FACE_DOWN) ||
+            controllerButtonDown(GAMEPAD_BUTTON_LEFT_TRIGGER_2) ||
+            controllerButtonDown(GAMEPAD_BUTTON_RIGHT_TRIGGER_2));
+        bool debugAxisActive = std::fabs(debugLeftX) > 0.2f || std::fabs(debugLeftY) > 0.2f ||
+                               std::fabs(debugRightX) > 0.2f || std::fabs(debugRightY) > 0.2f;
+        static bool previousControllerInput = false;
+        bool controllerInputActive = debugButtonDown || debugAxisActive;
+        if (controllerInputActive && !previousControllerInput) {
+            TraceLog(LOG_INFO, "Gamepad input received: left=(%.2f, %.2f), right=(%.2f, %.2f), buttons=%s",
+                     debugLeftX, debugLeftY, debugRightX, debugRightY,
+                     debugButtonDown ? "down" : "up");
+        }
+        previousControllerInput = controllerInputActive;
 
     #ifdef PLATFORM_ANDROID
         SetAndroidImmersiveMode();
@@ -2291,6 +2446,12 @@ int main() {
             else if (highscoreHover) introSelection = 3;
             else if (settingsHover) introSelection = 4;
 
+            if (controllerMapped) {
+                if (controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_UP)) introSelection = (introSelection + 4) % 5;
+                if (controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_DOWN)) introSelection = (introSelection + 1) % 5;
+                if (controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)) shouldExit = true;
+            }
+
             GameMode selectedMode = GameMode::SinglePlayer;
             bool startSelectedMode = false;
             bool openOnlineSetup = false;
@@ -2313,6 +2474,15 @@ int main() {
                 } else if (settingsHover) {
                     screenState = ScreenState::Settings;
                 }
+            }
+            if (allowIntroActivation && controllerMapped &&
+                controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
+                if (introSelection == 0 || introSelection == 1) {
+                    selectedMode = (introSelection == 0) ? GameMode::SinglePlayer : GameMode::CoOp;
+                    startSelectedMode = true;
+                } else if (introSelection == 2) openOnlineSetup = true;
+                else if (introSelection == 3) viewingHighscores = true;
+                else if (introSelection == 4) screenState = ScreenState::Settings;
             }
 
             if (openOnlineSetup) {
@@ -2356,7 +2526,53 @@ int main() {
             DrawMenuCard(highscoreRect, "Highscores", "View top scores and initials", introSelection == 3, highscoreHover, {200, 150, 255, 255});
             DrawMenuCard(settingsRect, "Settings", "Display, resolution, and monitor options", introSelection == 4, settingsHover, {130, 210, 255, 255});
 
-            DrawCenteredTextLine("Mouse: hover + click button   |   Esc: Quit", centerX, introY + introH - 34, 20, Fade(RAYWHITE, 0.85f));
+            const char* inputHint = controllerMapped
+                ? TextFormat("GLFW L %.1f %.1f R %.1f %.1f | A:%i B:%i RT:%i | D-pad/A menu",
+                             glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_X] : 0.0f,
+                             glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_Y] : 0.0f,
+                             glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] : 0.0f,
+                             glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] : 0.0f,
+                             glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_A] : 0,
+                             glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_B] : 0,
+                             glfwPadStateValid ? (glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.2f) : 0)
+                : (controllerConnected
+                    ? TextFormat("%s is visible, but GLFW has no standard mapping for this device", activeGamepadName ? activeGamepadName : "Controller")
+                    : "Mouse: hover + click button   |   Esc: Quit");
+            if (controllerConnected && !controllerMapped) {
+#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+                DrawCenteredTextLine(TextFormat("GLFW GUID: %s | raw axes: %i | raw buttons: %i",
+                                                activeGamepadGuid ? activeGamepadGuid : "unavailable",
+                                                glfwRawAxisCount, glfwRawButtonCount),
+                                     centerX, introY + introH - 82, 15, Fade(RAYWHITE, 0.85f));
+                DrawCenteredTextLine(TextFormat("Axes: %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f",
+                                                glfwRawAxes && glfwRawAxisCount > 0 ? glfwRawAxes[0] : 0.0f,
+                                                glfwRawAxes && glfwRawAxisCount > 1 ? glfwRawAxes[1] : 0.0f,
+                                                glfwRawAxes && glfwRawAxisCount > 2 ? glfwRawAxes[2] : 0.0f,
+                                                glfwRawAxes && glfwRawAxisCount > 3 ? glfwRawAxes[3] : 0.0f,
+                                                glfwRawAxes && glfwRawAxisCount > 4 ? glfwRawAxes[4] : 0.0f,
+                                                glfwRawAxes && glfwRawAxisCount > 5 ? glfwRawAxes[5] : 0.0f,
+                                                glfwRawAxes && glfwRawAxisCount > 6 ? glfwRawAxes[6] : 0.0f,
+                                                glfwRawAxes && glfwRawAxisCount > 7 ? glfwRawAxes[7] : 0.0f),
+                                     centerX, introY + introH - 62, 15, YELLOW);
+                DrawCenteredTextLine(TextFormat("Buttons: %i %i %i %i %i %i %i %i %i %i %i %i",
+                                                glfwRawButtons && glfwRawButtonCount > 0 ? glfwRawButtons[0] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 1 ? glfwRawButtons[1] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 2 ? glfwRawButtons[2] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 3 ? glfwRawButtons[3] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 4 ? glfwRawButtons[4] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 5 ? glfwRawButtons[5] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 6 ? glfwRawButtons[6] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 7 ? glfwRawButtons[7] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 8 ? glfwRawButtons[8] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 9 ? glfwRawButtons[9] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 10 ? glfwRawButtons[10] : 0,
+                                                glfwRawButtons && glfwRawButtonCount > 11 ? glfwRawButtons[11] : 0),
+                                     centerX, introY + introH - 42, 15, ORANGE);
+#endif
+                DrawCenteredTextLine(inputHint, centerX, introY + introH - 22, 16, Fade(RAYWHITE, 0.85f));
+            } else {
+                DrawCenteredTextLine(inputHint, centerX, introY + introH - 34, 20, Fade(RAYWHITE, 0.85f));
+            }
             EndDrawing();
             continue;
         }
@@ -2805,7 +3021,8 @@ int main() {
             continue;
         }
 
-        if (!dead && IsKeyPressed(KEY_ESCAPE)) {
+        if (!dead && (IsKeyPressed(KEY_ESCAPE) ||
+            (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_MIDDLE_RIGHT)))) {
             paused = !paused;
             pauseSelection = 0;
             if (paused) {
@@ -2827,28 +3044,28 @@ int main() {
         }
 
         if (paused && !dead) {
-            if (IsKeyPressed(KEY_UP)) {
+            if (IsKeyPressed(KEY_UP) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_UP))) {
                 pauseSelection = (pauseSelection + 7) % 8;
             }
-            if (IsKeyPressed(KEY_DOWN)) {
+            if (IsKeyPressed(KEY_DOWN) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_DOWN))) {
                 pauseSelection = (pauseSelection + 1) % 8;
             }
 
             if (pauseSelection == 1) {
-                if (IsKeyPressed(KEY_LEFT)) {
+                if (IsKeyPressed(KEY_LEFT) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_LEFT))) {
                     applyResolutionIndex(currentResolutionIndex - 1);
                 }
-                if (IsKeyPressed(KEY_RIGHT)) {
+                if (IsKeyPressed(KEY_RIGHT) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_RIGHT))) {
                     applyResolutionIndex(currentResolutionIndex + 1);
                 }
             }
             if (pauseSelection == 4) {
-                if (IsKeyPressed(KEY_LEFT)) {
+                if (IsKeyPressed(KEY_LEFT) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_LEFT))) {
                     auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
                     int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
                     applyTargetFps(targetFpsOptions[(index - 1 + static_cast<int>(targetFpsOptions.size())) % static_cast<int>(targetFpsOptions.size())]);
                 }
-                if (IsKeyPressed(KEY_RIGHT)) {
+                if (IsKeyPressed(KEY_RIGHT) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_RIGHT))) {
                     auto it = std::find(targetFpsOptions.begin(), targetFpsOptions.end(), targetFps);
                     int index = (it == targetFpsOptions.end()) ? 0 : static_cast<int>(it - targetFpsOptions.begin());
                     applyTargetFps(targetFpsOptions[(index + 1) % static_cast<int>(targetFpsOptions.size())]);
@@ -2856,10 +3073,10 @@ int main() {
             }
 #ifndef PLATFORM_ANDROID
             if (pauseSelection == 3) {
-                if (IsKeyPressed(KEY_LEFT)) {
+                if (IsKeyPressed(KEY_LEFT) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_LEFT))) {
                     applyMonitorIndex(selectedMonitor - 1);
                 }
-                if (IsKeyPressed(KEY_RIGHT)) {
+                if (IsKeyPressed(KEY_RIGHT) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_LEFT_FACE_RIGHT))) {
                     applyMonitorIndex(selectedMonitor + 1);
                 }
             }
@@ -2940,7 +3157,7 @@ int main() {
                 }
             }
 
-            if (IsKeyPressed(KEY_ENTER)) {
+            if (IsKeyPressed(KEY_ENTER) || (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN))) {
                 triggerPauseAction(pauseSelection);
             }
         }
@@ -3062,6 +3279,17 @@ int main() {
                 }
 #endif
                 enteringInitials = false;
+            }
+
+            if (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN) && !enteringInitials) {
+                resetGame();
+            }
+            if (controllerMapped && controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) {
+                closeNetwork();
+                resetGame();
+                screenState = ScreenState::Intro;
+                EnableCursor();
+                ShowCursor();
             }
 
             if (IsKeyPressed(KEY_R)) {
@@ -3215,6 +3443,13 @@ int main() {
                 const float mouseSensitivity = 0.0026f;
                 yaw -= mouse.x * mouseSensitivity;
                 pitch -= mouse.y * mouseSensitivity;
+                // Right stick look; scale by frame time so sensitivity is stable at different FPS.
+                if (controllerMapped) {
+                    float lookX = controllerAxis(GAMEPAD_AXIS_RIGHT_X);
+                    float lookY = controllerAxis(GAMEPAD_AXIS_RIGHT_Y);
+                    if (std::fabs(lookX) > 0.12f) yaw += lookX * 2.2f * dt;
+                    if (std::fabs(lookY) > 0.12f) pitch += lookY * 2.2f * dt;
+                }
                 pitch = Clamp(pitch, -1.4f, 1.4f);
 #endif
             }
@@ -3266,6 +3501,16 @@ int main() {
                 if (IsKeyDown(KEY_S)) movement = Vector3Subtract(movement, flatForward);
                 if (IsKeyDown(KEY_D)) movement = Vector3Add(movement, right);
                 if (IsKeyDown(KEY_A)) movement = Vector3Subtract(movement, right);
+                if (controllerMapped) {
+                    float moveX = controllerAxis(GAMEPAD_AXIS_LEFT_X);
+                    float moveY = controllerAxis(GAMEPAD_AXIS_LEFT_Y);
+                    if (std::fabs(moveX) < 0.16f) moveX = 0.0f;
+                    if (std::fabs(moveY) < 0.16f) moveY = 0.0f;
+                    movement = Vector3Add(movement, Vector3Scale(flatForward, -moveY));
+                    movement = Vector3Add(movement, Vector3Scale(right, moveX));
+                    if (controllerButtonDown(GAMEPAD_BUTTON_LEFT_TRIGGER_2) ||
+                        controllerButtonDown(GAMEPAD_BUTTON_LEFT_THUMB)) moveSpeed = 10.5f;
+                }
 #endif
 
                 if (Vector3Length(movement) > 0.001f) {
@@ -3319,6 +3564,20 @@ int main() {
                     if (IsKeyDown(KEY_LEFT_SHIFT)) moveMask |= (1 << 4);
                     if (IsKeyDown(KEY_SPACE)) moveMask |= (1 << 5);
                     if (IsMouseButtonDown(MOUSE_BUTTON_LEFT)) moveMask |= (1 << 6);
+                    if (controllerMapped) {
+                        float moveX = controllerAxis(GAMEPAD_AXIS_LEFT_X);
+                        float moveY = controllerAxis(GAMEPAD_AXIS_LEFT_Y);
+                        if (moveY < -0.16f) moveMask |= (1 << 0);
+                        if (moveY > 0.16f) moveMask |= (1 << 1);
+                        if (moveX < -0.16f) moveMask |= (1 << 2);
+                        if (moveX > 0.16f) moveMask |= (1 << 3);
+                        if (controllerButtonDown(GAMEPAD_BUTTON_LEFT_TRIGGER_2) ||
+                            controllerButtonDown(GAMEPAD_BUTTON_LEFT_THUMB)) moveMask |= (1 << 4);
+                        if (controllerButtonDown(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) moveMask |= (1 << 5);
+                        if (controllerButtonDown(GAMEPAD_BUTTON_RIGHT_TRIGGER_1) ||
+                            controllerAxis(GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.2f ||
+                            controllerButtonDown(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT)) moveMask |= (1 << 6);
+                    }
 #endif
                 }
 
@@ -3351,6 +3610,11 @@ int main() {
                 }
 #else
                 if (playerHealth > 0.0f && grounded && IsKeyPressed(KEY_SPACE)) {
+                    verticalVelocity = 9.5f;
+                    grounded = false;
+                }
+                if (playerHealth > 0.0f && grounded && controllerMapped &&
+                    controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_DOWN)) {
                     verticalVelocity = 9.5f;
                     grounded = false;
                 }
@@ -3421,6 +3685,12 @@ int main() {
 #else
                 bool shootDown = IsMouseButtonDown(MOUSE_BUTTON_LEFT);
                 bool shootPressed = IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+                if (controllerMapped) {
+                    shootDown = shootDown || controllerButtonDown(GAMEPAD_BUTTON_RIGHT_TRIGGER_1) ||
+                        controllerAxis(GAMEPAD_AXIS_RIGHT_TRIGGER) > 0.2f ||
+                        controllerButtonDown(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);
+                    shootPressed = shootPressed || controllerButtonPressed(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT);
+                }
 #endif
                 
                 if (playerHealth > 0.0f && (shootDown || shootPressed) && shootCooldown <= 0.0f && !shopOpen && !inventoryOpen) {
@@ -4379,6 +4649,36 @@ int main() {
         }
 
         DrawText("Potato Cannon vs Chicken Horde", 20, screenHeight - 40, 24, BLACK);
+        if (controllerMapped && !paused && !dead && !shopOpen && !inventoryOpen) {
+            DrawText("L: Move   R: Aim   A: Jump   RT/B: Fire   LT/L3: Sprint   Start: Pause",
+                     20, screenHeight - 68, 17, Fade(RAYWHITE, 0.85f));
+            DrawText(TextFormat("GLFW state: %s | L %.1f %.1f R %.1f %.1f | A:%i B:%i RT:%i",
+                                glfwPadStateValid ? "valid" : "missing",
+                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_X] : 0.0f,
+                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_Y] : 0.0f,
+                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] : 0.0f,
+                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] : 0.0f,
+                                glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_A] : 0,
+                                glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_B] : 0,
+                                glfwPadStateValid ? (glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.2f) : 0),
+                     20, screenHeight - 88, 15, YELLOW);
+            DrawText(TextFormat("Raw GLFW: axes %i [%.1f %.1f %.1f %.1f] buttons %i [%.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f]",
+                                glfwRawAxisCount,
+                                glfwRawAxes && glfwRawAxisCount > 0 ? glfwRawAxes[0] : 0.0f,
+                                glfwRawAxes && glfwRawAxisCount > 1 ? glfwRawAxes[1] : 0.0f,
+                                glfwRawAxes && glfwRawAxisCount > 2 ? glfwRawAxes[2] : 0.0f,
+                                glfwRawAxes && glfwRawAxisCount > 3 ? glfwRawAxes[3] : 0.0f,
+                                glfwRawButtonCount,
+                                glfwRawButtons && glfwRawButtonCount > 0 ? static_cast<float>(glfwRawButtons[0]) : 0.0f,
+                                glfwRawButtons && glfwRawButtonCount > 1 ? static_cast<float>(glfwRawButtons[1]) : 0.0f,
+                                glfwRawButtons && glfwRawButtonCount > 2 ? static_cast<float>(glfwRawButtons[2]) : 0.0f,
+                                glfwRawButtons && glfwRawButtonCount > 3 ? static_cast<float>(glfwRawButtons[3]) : 0.0f,
+                                glfwRawButtons && glfwRawButtonCount > 4 ? static_cast<float>(glfwRawButtons[4]) : 0.0f,
+                                glfwRawButtons && glfwRawButtonCount > 5 ? static_cast<float>(glfwRawButtons[5]) : 0.0f,
+                                glfwRawButtons && glfwRawButtonCount > 6 ? static_cast<float>(glfwRawButtons[6]) : 0.0f,
+                                glfwRawButtons && glfwRawButtonCount > 7 ? static_cast<float>(glfwRawButtons[7]) : 0.0f),
+                     20, screenHeight - 108, 14, ORANGE);
+        }
 
         if (!dead && waveTitleTimer > 0.0f) {
             float t = waveTitleTimer / waveTitleDuration;
@@ -4625,8 +4925,8 @@ int main() {
                 DrawText("Press ENTER to submit", screenWidth / 2 - 130, screenHeight / 2 + 130, 20, ORANGE);
 #endif
             } else {
-                DrawText("Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
-                DrawText("Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
+                DrawText(controllerMapped ? "A: restart" : "Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
+                DrawText(controllerMapped ? "B: main menu" : "Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
             }
 
 #ifdef PLATFORM_ANDROID
@@ -4682,8 +4982,8 @@ int main() {
             DrawText(TextFormat("FPS Counter: %s", showFpsCounter ? "On" : "Off"), panelX + 70, panelY + 402, 30, fpsCounterColor);
             DrawText("Quit Game", panelX + 70, panelY + 452, 34, quitColor);
 
-            DrawText("Mouse: Click items   Arrows change settings", panelX + 70, panelY + 482, 18, LIGHTGRAY);
-            DrawText("UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 500, 18, LIGHTGRAY);
+            DrawText(controllerMapped ? "D-pad: select   A: confirm   Start: resume" : "Mouse: Click items   Arrows change settings", panelX + 70, panelY + 482, 18, LIGHTGRAY);
+            DrawText(controllerMapped ? "Left/Right: change   Start: resume" : "UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 500, 18, LIGHTGRAY);
         }
 
         if (showFpsCounter) {
