@@ -69,7 +69,7 @@ if(ANDROID OR (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
     )
     FetchContent_MakeAvailable(curl)
     set(CURL_FOUND TRUE)
-elseif(NOT ANDROID)
+elseif(NOT ANDROID AND NOT EMSCRIPTEN)
     find_package(CURL QUIET)
 endif()
 
@@ -170,17 +170,29 @@ else()
         target_link_libraries(chicken_potato_fps PRIVATE CURL::libcurl)
         target_compile_definitions(chicken_potato_fps PRIVATE HAS_CURL)
         message(STATUS "ChickenPotatoFPS: libcurl found, latest-version checks enabled")
+    elseif(EMSCRIPTEN)
+        message(STATUS "ChickenPotatoFPS: Emscripten Fetch API enabled for latest-version checks")
     else()
         message(STATUS "ChickenPotatoFPS: libcurl not found, latest-version checks disabled")
     endif()
     
     if(EMSCRIPTEN)
         # Emscripten-specific settings for web builds
-        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -s USE_GLFW=3")
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -s USE_GLFW=3")
-        set_target_properties(chicken_potato_fps PROPERTIES 
-            LINK_FLAGS "-s USE_GLFW=3 -s ASSERTIONS=1 -s WASM=1 -s ASYNCIFY -s ALLOW_MEMORY_GROWTH=1 --preload-file ${CMAKE_SOURCE_DIR}/highscores.txt@highscores.txt"
+        set(WEB_LINK_OPTIONS
+            "-sUSE_GLFW=3"
+            "-sASSERTIONS=1"
+            "-sWASM=1"
+            "-sASYNCIFY"
+            "-sALLOW_MEMORY_GROWTH=1"
+            "-sFETCH=1"
         )
+        if(EXISTS "${CMAKE_SOURCE_DIR}/highscores.txt")
+            list(APPEND WEB_LINK_OPTIONS
+                "--preload-file"
+                "${CMAKE_SOURCE_DIR}/highscores.txt@highscores.txt"
+            )
+        endif()
+        target_link_options(chicken_potato_fps PRIVATE ${WEB_LINK_OPTIONS})
         # Define PLATFORM_WEB for conditional compilation
         target_compile_definitions(chicken_potato_fps PRIVATE PLATFORM_WEB)
     elseif(WIN32)

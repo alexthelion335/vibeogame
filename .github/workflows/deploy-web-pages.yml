@@ -1,0 +1,71 @@
+name: Deploy WebAssembly to GitHub Pages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Emscripten
+        uses: emscripten-core/setup-emsdk@v15
+        with:
+          version: 6.0.9
+
+      - name: Build WebAssembly game
+        run: ./build-web.sh
+
+      - name: Prepare Pages files
+        shell: bash
+        run: |
+          set -euo pipefail
+          web_html="$(find build-web -maxdepth 1 -type f -name 'chicken_potato_fps_web_*.html' -print -quit)"
+          if [[ -z "$web_html" ]]; then
+              echo "WebAssembly HTML output not found in build-web/" >&2
+              exit 1
+          fi
+
+          web_basename="${web_html%.html}"
+          mkdir -p pages
+          cp "$web_html" pages/index.html
+          cp "${web_basename}.js" "${web_basename}.wasm" pages/
+          if [[ -f "${web_basename}.data" ]]; then
+              cp "${web_basename}.data" pages/
+          fi
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: pages
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

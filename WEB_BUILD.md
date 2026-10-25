@@ -35,11 +35,9 @@ echo 'source /path/to/emsdk/emsdk_env.sh' >> ~/.bashrc
 ./build-web.sh
 ```
 
-This will create the following files in `build-web/`:
-- `chicken_potato_fps.html` - Main HTML file
-- `chicken_potato_fps.js` - JavaScript loader
-- `chicken_potato_fps.wasm` - WebAssembly binary
-- `chicken_potato_fps.data` - Game assets (including highscores.txt)
+This creates the HTML, JavaScript, and WebAssembly files in `build-web/`. Their names include the target platform and architecture (for example, `chicken_potato_fps_web_x86.html`). A `.data` file is created only when a `highscores.txt` file is present.
+
+The WebAssembly build uses Emscripten's browser Fetch API for the latest-version check; it does not link native libcurl. This requires the player’s browser to have network access to the GitHub Releases API. The CMake configuration also skips preloading `highscores.txt` when that optional file is absent.
 
 ### Manual Build
 ```bash
@@ -74,11 +72,13 @@ php -S localhost:8000
 
 ## Deploying to Your Website
 
-1. Upload all four files to your web server:
-   - `chicken_potato_fps.html`
-   - `chicken_potato_fps.js`
-   - `chicken_potato_fps.wasm`
-   - `chicken_potato_fps.data`
+1. Upload the generated HTML, JavaScript, and WebAssembly files to your web server. Upload the `.data` file too if the build generated one.
+
+### Automatic GitHub Pages Deployment
+
+The `Deploy WebAssembly to GitHub Pages` GitHub Actions workflow builds and deploys the game whenever a GitHub release is published. It can also be started manually from the repository's Actions tab. The generated game page is published as `index.html` at the Pages site root.
+
+To enable deployment, open the repository's **Settings → Pages** page and set **Build and deployment → Source** to **GitHub Actions**. After the first successful workflow run, GitHub displays the site URL in the `github-pages` deployment environment.
 
 2. Make sure your server has the correct MIME types:
    - `.wasm` → `application/wasm`
@@ -134,8 +134,9 @@ To customize the appearance of the game page, you can create a custom HTML shell
 
 ### Black screen or loading issues
 - Check browser console for errors
-- Verify all four files (html, js, wasm, data) are in the same directory
+- Verify the generated HTML, JS, and WASM files (and `.data` file if present) are in the same directory
 - Ensure you're using a web server (not file://)
+- `chicken_potato_fps.data` is only generated when `highscores.txt` is present; if it is absent, deploy the generated HTML, JavaScript, and WebAssembly files.
 
 ### Performance issues
 - Enable Release build mode (already default in build-web.sh)

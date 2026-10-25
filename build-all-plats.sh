@@ -59,17 +59,25 @@ else
     echo "WARNING: MinGW toolchain not found, skipping Windows build"
 fi
 
-# echo "Building Web (Emscripten)..."
-# source  /etc/profile.d/emscripten.sh
-# if command -v emcc >/dev/null 2>&1; then
-#     ./build-web.sh
-#     copy_if_exists "build-web/chicken_potato_fps.html"
-#     copy_if_exists "build-web/chicken_potato_fps.js"
-#     copy_if_exists "build-web/chicken_potato_fps.wasm"
-#     copy_if_exists "build-web/chicken_potato_fps.data"
-# else
-#     echo "WARNING: emcc not found, skipping Web build"
-# fi
+echo "Building Web (Emscripten)..."
+if ! command -v emcc >/dev/null 2>&1 && [[ -f /etc/profile.d/emscripten.sh ]]; then
+    # Load the system Emscripten environment when the script was not launched
+    # from a shell where emsdk is already activated.
+    source /etc/profile.d/emscripten.sh
+fi
+if command -v emcc >/dev/null 2>&1; then
+    ./build-web.sh
+    for web_html in build-web/chicken_potato_fps_web_*.html; do
+        [[ -f "$web_html" ]] || continue
+        web_basename="${web_html%.html}"
+        copy_if_exists "${web_basename}.html"
+        copy_if_exists "${web_basename}.js"
+        copy_if_exists "${web_basename}.wasm"
+        copy_if_exists "${web_basename}.data"
+    done
+else
+    echo "WARNING: emcc not found, skipping Web build"
+fi
 
 echo "Building Android native library..."
 ./android/build-android.sh

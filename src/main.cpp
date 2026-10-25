@@ -29,6 +29,10 @@
     #include <curl/curl.h>
 #endif
 
+#ifdef PLATFORM_WEB
+    #include <emscripten/fetch.h>
+#endif
+
 #ifdef PLATFORM_ANDROID
     #include <jni.h>
     #include <android/window.h>
@@ -548,6 +552,22 @@ static int CompareSemVer(const std::string& a, const std::string& b) {
     return 0;
 }
 
+static std::string ParseLatestVersionResponse(const char* body, size_t bodySize) {
+    if (body == nullptr) return "";
+    const std::string response(body, bodySize);
+    const std::string tagKey = "\"tag_name\"";
+    size_t keyPos = response.find(tagKey);
+    if (keyPos == std::string::npos) return "";
+    size_t colonPos = response.find(':', keyPos + tagKey.size());
+    if (colonPos == std::string::npos) return "";
+    size_t firstQuote = response.find('"', colonPos + 1);
+    if (firstQuote == std::string::npos) return "";
+    size_t secondQuote = response.find('"', firstQuote + 1);
+    if (secondQuote == std::string::npos || secondQuote <= firstQuote + 1) return "";
+
+    return NormalizeVersionTag(response.substr(firstQuote + 1, secondQuote - firstQuote - 1));
+}
+
 #ifdef HAS_CURL
 static size_t CurlWriteToString(char* ptr, size_t size, size_t nmemb, void* userdata) {
     if (ptr == nullptr || userdata == nullptr) return 0;
@@ -576,18 +596,41 @@ static std::string FetchLatestVersionFromGitHub() {
     if (code != CURLE_OK || httpCode < 200 || httpCode >= 300) {
         return "";
     }
+    return ParseLatestVersionResponse(body.data(), body.size());
+}
+#endif
 
-    const std::string tagKey = "\"tag_name\"";
-    size_t keyPos = body.find(tagKey);
-    if (keyPos == std::string::npos) return "";
-    size_t colonPos = body.find(':', keyPos + tagKey.size());
-    if (colonPos == std::string::npos) return "";
-    size_t firstQuote = body.find('"', colonPos + 1);
-    if (firstQuote == std::string::npos) return "";
-    size_t secondQuote = body.find('"', firstQuote + 1);
-    if (secondQuote == std::string::npos || secondQuote <= firstQuote + 1) return "";
+#ifdef PLATFORM_WEB
+struct WebLatestVersionCheck {
+    std::string version;
+    bool completed = false;
+};
 
-    return NormalizeVersionTag(body.substr(firstQuote + 1, secondQuote - firstQuote - 1));
+static void OnLatestVersionFetchSucceeded(emscripten_fetch_t* fetch) {
+    auto* state = static_cast<WebLatestVersionCheck*>(fetch->userData);
+    if (state != nullptr) {
+        state->version = ParseLatestVersionResponse(fetch->data, static_cast<size_t>(fetch->numBytes));
+        state->completed = true;
+    }
+    emscripten_fetch_close(fetch);
+}
+
+static void OnLatestVersionFetchFailed(emscripten_fetch_t* fetch) {
+    auto* state = static_cast<WebLatestVersionCheck*>(fetch->userData);
+    if (state != nullptr) state->completed = true;
+    emscripten_fetch_close(fetch);
+}
+
+static void StartLatestVersionFetch(WebLatestVersionCheck& state) {
+    emscripten_fetch_attr_t attributes;
+    emscripten_fetch_attr_init(&attributes);
+    std::strcpy(attributes.requestMethod, "GET");
+    attributes.attributes = EMSCRIPTEN_FETCH_LOAD_TO_MEMORY;
+    attributes.timeoutMSecs = 4500;
+    attributes.userData = &state;
+    attributes.onsuccess = OnLatestVersionFetchSucceeded;
+    attributes.onerror = OnLatestVersionFetchFailed;
+    emscripten_fetch(&attributes, "https://api.github.com/repos/alexthelion335/vibeogame/releases/latest");
 }
 #endif
 
@@ -924,10 +967,14 @@ int main() {
     std::string latestVersion = "";
     std::string latestVersionLine = "Latest: checking...";
     Color latestVersionColor = Fade(RAYWHITE, 0.70f);
-#ifdef HAS_CURL
+#if defined(HAS_CURL)
     std::future<std::string> latestVersionFuture = std::async(std::launch::async, []() {
         return FetchLatestVersionFromGitHub();
     });
+    bool latestVersionPending = true;
+#elif defined(PLATFORM_WEB)
+    WebLatestVersionCheck webLatestVersionCheck;
+    StartLatestVersionFetch(webLatestVersionCheck);
     bool latestVersionPending = true;
 #else
     bool latestVersionPending = false;
@@ -2676,11 +2723,23 @@ int main() {
         SetAndroidImmersiveMode();
     #endif
 
-    #ifdef HAS_CURL
+        std::string fetchedLatestVersion;
+        bool latestVersionCheckFinished = false;
+#ifdef HAS_CURL
         if (latestVersionPending &&
             latestVersionFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+            fetchedLatestVersion = latestVersionFuture.get();
+            latestVersionCheckFinished = true;
+        }
+#elif defined(PLATFORM_WEB)
+        if (latestVersionPending && webLatestVersionCheck.completed) {
+            fetchedLatestVersion = webLatestVersionCheck.version;
+            latestVersionCheckFinished = true;
+        }
+#endif
+        if (latestVersionCheckFinished) {
             latestVersionPending = false;
-            latestVersion = NormalizeVersionTag(latestVersionFuture.get());
+            latestVersion = NormalizeVersionTag(fetchedLatestVersion);
 
             if (latestVersion.empty()) {
                 latestVersionLine = "Latest: check failed";
@@ -2698,7 +2757,6 @@ int main() {
                 }
             }
         }
-    #endif
         
         // Reinitialize touch controls if screen size changed
 #ifdef PLATFORM_ANDROID

@@ -2,6 +2,8 @@
 
 A small 3D first-person survival shooter where you fight off hordes of angry chickens with a potato cannon.
 
+[Play in your browser](https://alexthelion335.github.io/vibeogame/)
+
 ## Features
 
 - First-person movement (`WASD`) + mouse look
