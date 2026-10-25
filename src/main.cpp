@@ -2243,7 +2243,6 @@ int main() {
         }
         const char* activeGamepadName = controllerConnected ? GetGamepadName(activeGamepad) : nullptr;
 #if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
-        const char* activeGamepadGuid = controllerConnected ? glfwGetJoystickGUID(activeGamepad) : nullptr;
         GLFWgamepadstate glfwPadState{};
         const bool glfwPadStateValid = controllerMapped && glfwGetGamepadState(activeGamepad, &glfwPadState);
         int glfwRawAxisCount = 0;
@@ -2290,7 +2289,6 @@ int main() {
             previousGlfwPadId = -1;
         }
 #else
-        const char* activeGamepadGuid = nullptr;
         const bool glfwPadStateValid = false;
         int glfwRawAxisCount = 0;
         int glfwRawButtonCount = 0;
@@ -2951,56 +2949,11 @@ int main() {
             const char* inputHint = controllerMapped
                 ? "D-pad: select | {A}: confirm | Start: quit"
                 : (controllerConnected
-                    ? "GLFW has no standard mapping; raw input states are shown above"
+                    ? "Controller detected but not mapped"
                     : "Mouse: hover + click button   |   Esc: Quit");
-            if (controllerConnected) {
-#if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
-                DrawCenteredTextLine(TextFormat("%s | %s | GLFW GUID: %s",
-                                                activeGamepadName ? activeGamepadName : "Controller",
-                                                controllerCustomMapped ? "custom raw map" : (controllerMapped ? "GLFW mapped" : "unmapped"),
-                                                activeGamepadGuid ? activeGamepadGuid : "unavailable"),
-                                     centerX, introY + introH - 100, 13, Fade(RAYWHITE, 0.9f));
-                DrawCenteredTextLine(TextFormat("Mapped B:%i Start:%i | D-pad U/R/D/L: %i %i %i %i",
-                                                controllerButtonDown(GAMEPAD_BUTTON_RIGHT_FACE_RIGHT),
-                                                controllerButtonDown(GAMEPAD_BUTTON_MIDDLE_RIGHT),
-                                                controllerButtonDown(GAMEPAD_BUTTON_LEFT_FACE_UP),
-                                                controllerButtonDown(GAMEPAD_BUTTON_LEFT_FACE_RIGHT),
-                                                controllerButtonDown(GAMEPAD_BUTTON_LEFT_FACE_DOWN),
-                                                controllerButtonDown(GAMEPAD_BUTTON_LEFT_FACE_LEFT)),
-                                     centerX, introY + introH - 80, 13, YELLOW);
-                DrawCenteredTextLine(TextFormat("Raw hats: %i [%u] | raw buttons 0-11: %i %i %i %i %i %i %i %i %i %i %i %i",
-                                                glfwRawHatCount,
-                                                glfwRawHats && glfwRawHatCount > 0 ? static_cast<unsigned int>(glfwRawHats[0]) : 0u,
-                                                glfwRawButtons && glfwRawButtonCount > 0 ? glfwRawButtons[0] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 1 ? glfwRawButtons[1] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 2 ? glfwRawButtons[2] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 3 ? glfwRawButtons[3] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 4 ? glfwRawButtons[4] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 5 ? glfwRawButtons[5] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 6 ? glfwRawButtons[6] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 7 ? glfwRawButtons[7] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 8 ? glfwRawButtons[8] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 9 ? glfwRawButtons[9] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 10 ? glfwRawButtons[10] : 0,
-                                                glfwRawButtons && glfwRawButtonCount > 11 ? glfwRawButtons[11] : 0),
-                                     centerX, introY + introH - 60, 13, ORANGE);
-                DrawCenteredTextLine(TextFormat("Raw axes 0-7: %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f",
-                                                glfwRawAxes && glfwRawAxisCount > 0 ? glfwRawAxes[0] : 0.0f,
-                                                glfwRawAxes && glfwRawAxisCount > 1 ? glfwRawAxes[1] : 0.0f,
-                                                glfwRawAxes && glfwRawAxisCount > 2 ? glfwRawAxes[2] : 0.0f,
-                                                glfwRawAxes && glfwRawAxisCount > 3 ? glfwRawAxes[3] : 0.0f,
-                                                glfwRawAxes && glfwRawAxisCount > 4 ? glfwRawAxes[4] : 0.0f,
-                                                glfwRawAxes && glfwRawAxisCount > 5 ? glfwRawAxes[5] : 0.0f,
-                                                glfwRawAxes && glfwRawAxisCount > 6 ? glfwRawAxes[6] : 0.0f,
-                                                glfwRawAxes && glfwRawAxisCount > 7 ? glfwRawAxes[7] : 0.0f),
-                                     centerX, introY + introH - 40, 13, Fade(RAYWHITE, 0.9f));
-#endif
-                DrawCenteredControllerPromptLine(inputHint, centerX, introY + introH - 18, 14,
-                                                 Fade(RAYWHITE, 0.85f), playStationController);
-            } else {
-                DrawCenteredControllerPromptLine(inputHint, centerX, introY + introH - 34, 20,
-                                                 Fade(RAYWHITE, 0.85f), playStationController);
-            }
+            DrawCenteredControllerPromptLine(inputHint, centerX,
+                                             controllerConnected ? introY + introH - 18 : introY + introH - 34,
+                                             controllerConnected ? 14 : 20, Fade(RAYWHITE, 0.85f), playStationController);
             EndDrawing();
             continue;
         }
@@ -5305,34 +5258,6 @@ int main() {
         if (controllerMapped && !paused && !dead && !shopOpen && !inventoryOpen) {
             DrawControllerPromptLine("L: Move   R: Aim   {A}: Jump   RT/{B}: Fire   LT/L3: Sprint   Start: Pause",
                                      20, screenHeight - 68, 17, Fade(RAYWHITE, 0.85f), playStationController);
-            DrawControllerPromptLine(TextFormat("Input state: %s | L %.1f %.1f R %.1f %.1f | {%c}:%i {%c}:%i RT:%i",
-                                controllerCustomMapped ? "SN30 raw" : (glfwPadStateValid ? "GLFW" : "missing"),
-                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_X] : 0.0f,
-                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_Y] : 0.0f,
-                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] : 0.0f,
-                                glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] : 0.0f,
-                                'A',
-                                glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_A] : 0,
-                                'B',
-                                glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_B] : 0,
-                                glfwPadStateValid ? (glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.2f) : 0),
-                                     20, screenHeight - 88, 15, YELLOW, playStationController);
-            DrawText(TextFormat("Raw GLFW: axes %i [%.1f %.1f %.1f %.1f] buttons %i [%.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f]",
-                                glfwRawAxisCount,
-                                glfwRawAxes && glfwRawAxisCount > 0 ? glfwRawAxes[0] : 0.0f,
-                                glfwRawAxes && glfwRawAxisCount > 1 ? glfwRawAxes[1] : 0.0f,
-                                glfwRawAxes && glfwRawAxisCount > 2 ? glfwRawAxes[2] : 0.0f,
-                                glfwRawAxes && glfwRawAxisCount > 3 ? glfwRawAxes[3] : 0.0f,
-                                glfwRawButtonCount,
-                                glfwRawButtons && glfwRawButtonCount > 0 ? static_cast<float>(glfwRawButtons[0]) : 0.0f,
-                                glfwRawButtons && glfwRawButtonCount > 1 ? static_cast<float>(glfwRawButtons[1]) : 0.0f,
-                                glfwRawButtons && glfwRawButtonCount > 2 ? static_cast<float>(glfwRawButtons[2]) : 0.0f,
-                                glfwRawButtons && glfwRawButtonCount > 3 ? static_cast<float>(glfwRawButtons[3]) : 0.0f,
-                                glfwRawButtons && glfwRawButtonCount > 4 ? static_cast<float>(glfwRawButtons[4]) : 0.0f,
-                                glfwRawButtons && glfwRawButtonCount > 5 ? static_cast<float>(glfwRawButtons[5]) : 0.0f,
-                                glfwRawButtons && glfwRawButtonCount > 6 ? static_cast<float>(glfwRawButtons[6]) : 0.0f,
-                                glfwRawButtons && glfwRawButtonCount > 7 ? static_cast<float>(glfwRawButtons[7]) : 0.0f),
-                     20, screenHeight - 108, 14, ORANGE);
         }
 
         if (!dead && waveTitleTimer > 0.0f) {
