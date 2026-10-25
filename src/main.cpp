@@ -415,6 +415,86 @@ static void DrawCenteredTextLine(const char* text, int centerX, int y, int fontS
     DrawText(text, centerX - MeasureText(text, fontSize) / 2, y, fontSize, color);
 }
 
+static bool GetFaceButtonToken(const char* token, int length, char& button) {
+    if (length != 3 || token[0] != '{' || token[2] != '}') return false;
+    button = token[1];
+    return button == 'A' || button == 'B' || button == 'X' || button == 'Y';
+}
+
+static int MeasureControllerPrompt(const char* text, int fontSize, bool playStation) {
+    int width = 0;
+    const char* cursor = text;
+    while (*cursor) {
+        if (*cursor == '{' && cursor[1] && cursor[2] == '}') {
+            char button = 0;
+            if (GetFaceButtonToken(cursor, 3, button)) {
+                width += playStation ? static_cast<int>(fontSize * 0.82f) : MeasureText(TextFormat("%c", button), fontSize);
+                cursor += 3;
+                continue;
+            }
+        }
+        const char* start = cursor;
+        while (*cursor && *cursor != '{') ++cursor;
+        if (cursor == start) ++cursor;
+        width += MeasureText(TextSubtext(start, 0, static_cast<int>(cursor - start)), fontSize);
+    }
+    return width;
+}
+
+static void DrawPlayStationGlyph(char button, float x, int y, int fontSize, Color color) {
+    const float size = std::max(10.0f, fontSize * 0.70f);
+    const float left = x + fontSize * 0.06f;
+    const float top = y + (fontSize - size) * 0.5f;
+    const float right = left + size;
+    const float bottom = top + size;
+    const float thickness = std::max(1.5f, fontSize * 0.075f);
+    if (button == 'A') { // Cross (the south face button)
+        DrawLineEx({left + size * 0.18f, top + size * 0.18f}, {right - size * 0.18f, bottom - size * 0.18f}, thickness, color);
+        DrawLineEx({right - size * 0.18f, top + size * 0.18f}, {left + size * 0.18f, bottom - size * 0.18f}, thickness, color);
+    } else if (button == 'B') { // Circle (east)
+        DrawCircleLinesV({left + size * 0.5f, top + size * 0.5f}, size * 0.36f, color);
+    } else if (button == 'X') { // Square (west)
+        DrawRectangleLinesEx({left + size * 0.16f, top + size * 0.16f, size * 0.68f, size * 0.68f}, thickness, color);
+    } else if (button == 'Y') { // Triangle (north)
+        DrawLineEx({left + size * 0.5f, top + size * 0.12f}, {right - size * 0.12f, bottom - size * 0.14f}, thickness, color);
+        DrawLineEx({right - size * 0.12f, bottom - size * 0.14f}, {left + size * 0.12f, bottom - size * 0.14f}, thickness, color);
+        DrawLineEx({left + size * 0.12f, bottom - size * 0.14f}, {left + size * 0.5f, top + size * 0.12f}, thickness, color);
+    }
+}
+
+static void DrawControllerPromptLine(const char* text, int x, int y, int fontSize, Color color, bool playStation) {
+    int currentX = x;
+    const char* cursor = text;
+    while (*cursor) {
+        if (*cursor == '{' && cursor[1] && cursor[2] == '}') {
+            char button = 0;
+            if (GetFaceButtonToken(cursor, 3, button)) {
+                if (playStation) {
+                    DrawPlayStationGlyph(button, static_cast<float>(currentX), y, fontSize, color);
+                    currentX += static_cast<int>(fontSize * 0.82f);
+                } else {
+                    const char label[] = {button, '\0'};
+                    DrawText(label, currentX, y, fontSize, color);
+                    currentX += MeasureText(label, fontSize);
+                }
+                cursor += 3;
+                continue;
+            }
+        }
+        const char* start = cursor;
+        while (*cursor && *cursor != '{') ++cursor;
+        if (cursor == start) ++cursor;
+        const char* segment = TextSubtext(start, 0, static_cast<int>(cursor - start));
+        DrawText(segment, currentX, y, fontSize, color);
+        currentX += MeasureText(segment, fontSize);
+    }
+}
+
+static void DrawCenteredControllerPromptLine(const char* text, int centerX, int y, int fontSize, Color color, bool playStation) {
+    DrawControllerPromptLine(text, centerX - MeasureControllerPrompt(text, fontSize, playStation) / 2,
+                             y, fontSize, color, playStation);
+}
+
 static void DrawMenuCard(Rectangle rect,
                          const char* title,
                          const char* subtitle,
@@ -2214,6 +2294,14 @@ int main() {
         const unsigned char* glfwRawButtons = nullptr;
         const unsigned char* glfwRawHats = nullptr;
 #endif
+        std::string controllerNameForGlyphs = activeGamepadName ? activeGamepadName : "";
+        std::transform(controllerNameForGlyphs.begin(), controllerNameForGlyphs.end(), controllerNameForGlyphs.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const bool playStationController = controllerConnected &&
+            (controllerNameForGlyphs.find("playstation") != std::string::npos ||
+             controllerNameForGlyphs.find("dualshock") != std::string::npos ||
+             controllerNameForGlyphs.find("dualsense") != std::string::npos ||
+             controllerNameForGlyphs.find("sony") != std::string::npos);
         auto controllerAxis = [&](int axis) -> float {
 #if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
             if (controllerCustomMapped) {
@@ -2561,8 +2649,9 @@ int main() {
                 DrawCenteredTextLine(keys[i].c_str(), static_cast<int>(keyRect.x + keyRect.width / 2),
                                      static_cast<int>(keyRect.y + keyRect.height / 2 - fontSize / 2), fontSize, RAYWHITE);
             }
-            DrawCenteredTextLine("D-pad/Left Stick: move   A: type/select   B: delete   Select: close",
-                                 screenWidth / 2, static_cast<int>(bounds.y + bounds.height - 22), 15, Fade(RAYWHITE, 0.8f));
+            DrawCenteredControllerPromptLine("D-pad/Left Stick: move   {A}: type/select   {B}: delete   Select: close",
+                                             screenWidth / 2, static_cast<int>(bounds.y + bounds.height - 22),
+                                             15, Fade(RAYWHITE, 0.8f), playStationController);
             return result;
         };
 
@@ -2855,7 +2944,7 @@ int main() {
             DrawMenuCard(settingsRect, "Settings", "Display, resolution, and monitor options", introSelection == 4, settingsHover, {130, 210, 255, 255});
 
             const char* inputHint = controllerMapped
-                ? "D-pad: select | A: confirm | Start: quit"
+                ? "D-pad: select | {A}: confirm | Start: quit"
                 : (controllerConnected
                     ? "GLFW has no standard mapping; raw input states are shown above"
                     : "Mouse: hover + click button   |   Esc: Quit");
@@ -2901,9 +2990,11 @@ int main() {
                                                 glfwRawAxes && glfwRawAxisCount > 7 ? glfwRawAxes[7] : 0.0f),
                                      centerX, introY + introH - 40, 13, Fade(RAYWHITE, 0.9f));
 #endif
-                DrawCenteredTextLine(inputHint, centerX, introY + introH - 18, 14, Fade(RAYWHITE, 0.85f));
+                DrawCenteredControllerPromptLine(inputHint, centerX, introY + introH - 18, 14,
+                                                 Fade(RAYWHITE, 0.85f), playStationController);
             } else {
-                DrawCenteredTextLine(inputHint, centerX, introY + introH - 34, 20, Fade(RAYWHITE, 0.85f));
+                DrawCenteredControllerPromptLine(inputHint, centerX, introY + introH - 34, 20,
+                                                 Fade(RAYWHITE, 0.85f), playStationController);
             }
             EndDrawing();
             continue;
@@ -3086,9 +3177,9 @@ int main() {
                 DrawRectangleLinesEx(settingsRows[settingsSelection], 2.0f,
                                      controllerOwnsUi ? YELLOW : Fade(SKYBLUE, 0.8f));
             }
-            DrawCenteredTextLine("D-pad/Left Stick: navigate   A: select   Left/Right: adjust   Esc: Back",
-                                 screenWidth / 2, settingsY + settingsH - 28, 18,
-                                 Fade(RAYWHITE, 0.72f));
+            DrawCenteredControllerPromptLine("D-pad/Left Stick: navigate   {A}: select   Left/Right: adjust   Esc: Back",
+                                             screenWidth / 2, settingsY + settingsH - 28, 18,
+                                             Fade(RAYWHITE, 0.72f), playStationController);
             EndDrawing();
             continue;
         }
@@ -3290,7 +3381,8 @@ int main() {
             DrawRectangleRoundedLines(backRect, 0.24f, 8, (onlineSetupSelection == 4) ? ORANGE : Fade(RAYWHITE, 0.5f));
             DrawCenteredTextLine("Back", static_cast<int>(backRect.x + backRect.width / 2), static_cast<int>(backRect.y) + 14, 30, RAYWHITE);
 
-            DrawCenteredTextLine("D-pad/Left Stick + A or Enter: select   |   Esc: back", centerX, setupY + setupH - 34, 20, Fade(RAYWHITE, 0.84f));
+            DrawCenteredControllerPromptLine("D-pad/Left Stick + {A} or Enter: select   |   Esc: back",
+                                             centerX, setupY + setupH - 34, 20, Fade(RAYWHITE, 0.84f), playStationController);
             if (!netStatus.empty()) {
                 DrawCenteredTextLine(netStatus.c_str(), centerX, setupY + 126, 24, ORANGE);
             }
@@ -5106,18 +5198,20 @@ int main() {
 
         DrawText("Potato Cannon vs Chicken Horde", 20, screenHeight - 40, 24, BLACK);
         if (controllerMapped && !paused && !dead && !shopOpen && !inventoryOpen) {
-            DrawText("L: Move   R: Aim   A: Jump   RT/B: Fire   LT/L3: Sprint   Start: Pause",
-                     20, screenHeight - 68, 17, Fade(RAYWHITE, 0.85f));
-            DrawText(TextFormat("Input state: %s | L %.1f %.1f R %.1f %.1f | A:%i B:%i RT:%i",
+            DrawControllerPromptLine("L: Move   R: Aim   {A}: Jump   RT/{B}: Fire   LT/L3: Sprint   Start: Pause",
+                                     20, screenHeight - 68, 17, Fade(RAYWHITE, 0.85f), playStationController);
+            DrawControllerPromptLine(TextFormat("Input state: %s | L %.1f %.1f R %.1f %.1f | {%c}:%i {%c}:%i RT:%i",
                                 controllerCustomMapped ? "SN30 raw" : (glfwPadStateValid ? "GLFW" : "missing"),
                                 glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_X] : 0.0f,
                                 glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_LEFT_Y] : 0.0f,
                                 glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] : 0.0f,
                                 glfwPadStateValid ? glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] : 0.0f,
+                                'A',
                                 glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_A] : 0,
+                                'B',
                                 glfwPadStateValid ? glfwPadState.buttons[GLFW_GAMEPAD_BUTTON_B] : 0,
                                 glfwPadStateValid ? (glfwPadState.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.2f) : 0),
-                     20, screenHeight - 88, 15, YELLOW);
+                                     20, screenHeight - 88, 15, YELLOW, playStationController);
             DrawText(TextFormat("Raw GLFW: axes %i [%.1f %.1f %.1f %.1f] buttons %i [%.0f %.0f %.0f %.0f %.0f %.0f %.0f %.0f]",
                                 glfwRawAxisCount,
                                 glfwRawAxes && glfwRawAxisCount > 0 ? glfwRawAxes[0] : 0.0f,
@@ -5274,7 +5368,9 @@ int main() {
                 }
             }
 
-            DrawCenteredTextLine("D-pad/Left Stick: select   A/Enter: buy   B/Esc: close", screenWidth / 2, shopY + shopH - 50, 20, Fade(RAYWHITE, 0.6f));
+            DrawCenteredControllerPromptLine("D-pad/Left Stick: select   {A}/Enter: buy   {B}/Esc: close",
+                                             screenWidth / 2, shopY + shopH - 50, 20,
+                                             Fade(RAYWHITE, 0.6f), playStationController);
             DrawCenteredTextLine("Shop closes automatically when the timer ends", screenWidth / 2, shopY + shopH - 28, 18, Fade(RAYWHITE, 0.5f));
         }
 
@@ -5288,8 +5384,11 @@ int main() {
 
             DrawRectangle(invX, invY, invW, invH, Fade({10, 15, 25, 255}, 0.92f));
             DrawRectangleLinesEx({static_cast<float>(invX), static_cast<float>(invY), static_cast<float>(invW), static_cast<float>(invH)}, 3, SKYBLUE);
-            DrawCenteredTextLine("INVENTORY  (E/B to close)", screenWidth / 2, invY + 12, 28, SKYBLUE);
-            DrawCenteredTextLine("D-pad/Left Stick: select   A/Enter: mark and swap   B/Esc: close", screenWidth / 2, invY + 46, 18, Fade(RAYWHITE, 0.6f));
+            DrawCenteredControllerPromptLine(playStationController ? "INVENTORY  (E/{B} to close)" : "INVENTORY  (E/B to close)",
+                                             screenWidth / 2, invY + 12, 28, SKYBLUE, playStationController);
+            DrawCenteredControllerPromptLine("D-pad/Left Stick: select   {A}/Enter: mark and swap   {B}/Esc: close",
+                                             screenWidth / 2, invY + 46, 18,
+                                             Fade(RAYWHITE, 0.6f), playStationController);
 
             const char* weaponNames[] = {"Potato Cannon", "Potato Shotgun", "Potato Grenade Launcher"};
             Vector2 mp = GetMousePosition();
@@ -5402,8 +5501,13 @@ int main() {
                     DrawText("Type your initials (3 letters):", screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
                 }
 #else
-                DrawText(controllerOwnsUi ? "A: type initials   B: delete" : "Enter Your Initials (3 letters):",
-                         screenWidth / 2 - 160, screenHeight / 2 + 50, 24, YELLOW);
+                if (controllerOwnsUi) {
+                    DrawControllerPromptLine("{A}: type initials   {B}: delete", screenWidth / 2 - 160,
+                                             screenHeight / 2 + 50, 24, YELLOW, playStationController);
+                } else {
+                    DrawText("Enter Your Initials (3 letters):", screenWidth / 2 - 160,
+                             screenHeight / 2 + 50, 24, YELLOW);
+                }
 #endif
                 std::string displayInitials = pendingInitials;
                 while (displayInitials.size() < 3) displayInitials.push_back('_');
@@ -5450,8 +5554,10 @@ int main() {
                     static_cast<float>(screenHeight / 2 + 68), 360.0f, 38.0f};
                 DrawRectangleRoundedLines(deathRestartRect, 0.18f, 6, Fade(YELLOW, 0.75f));
                 DrawRectangleRoundedLines(deathMenuRect, 0.18f, 6, Fade(RAYWHITE, 0.5f));
-                DrawText(controllerMapped ? "A: restart" : "Press R to restart", screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW);
-                DrawText(controllerMapped ? "B: main menu" : "Press ESC for main menu", screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f));
+                DrawControllerPromptLine(controllerMapped ? "{A}: restart" : "Press R to restart",
+                                         screenWidth / 2 - 130, screenHeight / 2 + 42, 26, YELLOW, playStationController);
+                DrawControllerPromptLine(controllerMapped ? "{B}: main menu" : "Press ESC for main menu",
+                                         screenWidth / 2 - 130, screenHeight / 2 + 76, 26, Fade(RAYWHITE, 0.8f), playStationController);
             }
 
 #ifdef PLATFORM_ANDROID
@@ -5507,8 +5613,10 @@ int main() {
             DrawText(TextFormat("FPS Counter: %s", showFpsCounter ? "On" : "Off"), panelX + 70, panelY + 402, 30, fpsCounterColor);
             DrawText("Quit Game", panelX + 70, panelY + 452, 34, quitColor);
 
-            DrawText(controllerMapped ? "D-pad/Left Stick: select   A: confirm   Start: resume" : "Mouse: Click items   Arrows change settings", panelX + 70, panelY + 482, 18, LIGHTGRAY);
-            DrawText(controllerMapped ? "Left/Right: change   Start: resume" : "UP/DOWN + ENTER still work   ESC: Resume", panelX + 70, panelY + 500, 18, LIGHTGRAY);
+            DrawControllerPromptLine(controllerMapped ? "D-pad/Left Stick: select   {A}: confirm   Start: resume" : "Mouse: Click items   Arrows change settings",
+                                     panelX + 70, panelY + 482, 18, LIGHTGRAY, playStationController);
+            DrawControllerPromptLine(controllerMapped ? "Left/Right: change   Start: resume" : "UP/DOWN + ENTER still work   ESC: Resume",
+                                     panelX + 70, panelY + 500, 18, LIGHTGRAY, playStationController);
         }
 
         if (showFpsCounter) {
