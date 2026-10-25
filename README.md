@@ -51,6 +51,13 @@ cmake -S . -B build && cmake --build build -j$(nproc)
 ./build/chicken_potato_fps
 ```
 
+### Linux arm64 cross-build
+
+For a Linux arm64 executable from an x86_64 Arch host, see
+[LINUX_ARM64_CROSS_COMPILE.md](LINUX_ARM64_CROSS_COMPILE.md) and run
+`./build-linux-arm64.sh`. The script prepares the target OpenGL/X11 sysroot
+and cross-compiles the game.
+
 ### Windows
 
 Install dependencies:

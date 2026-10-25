@@ -4,9 +4,74 @@ project(ChickenPotatoFPS VERSION 1.3.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 include(FetchContent)
-find_package(CURL QUIET)
+
+# Native desktop builds use the platform's libcurl package. Cross builds must
+# not accidentally link the host libcurl, so build a small static curl for the
+# target architecture on Android and arm64 Linux.
+set(CURL_FOUND FALSE)
+if(ANDROID OR (CMAKE_CROSSCOMPILING AND CMAKE_SYSTEM_NAME STREQUAL "Linux" AND
+               CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$"))
+    set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+    set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+    set(USE_STATIC_MBEDTLS_LIBRARY ON CACHE BOOL "" FORCE)
+    set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+
+    FetchContent_Declare(
+        mbedtls
+        GIT_REPOSITORY https://github.com/Mbed-TLS/mbedtls.git
+        GIT_TAG mbedtls-3.6.7
+        GIT_SHALLOW TRUE
+        GIT_SUBMODULES_RECURSE TRUE
+    )
+    FetchContent_MakeAvailable(mbedtls)
+
+    # Let curl's FindMbedTLS module consume the Mbed TLS targets already
+    # created above instead of probing the host with pkg-config.
+    set(MBEDTLS_FOUND TRUE)
+    set(MBEDTLS_VERSION "3.6.7")
+    set(MBEDTLS_INCLUDE_DIR "${mbedtls_SOURCE_DIR}/include;${mbedtls_BINARY_DIR}/include")
+    set(MBEDTLS_LIBRARY MbedTLS::mbedtls)
+    set(MBEDX509_LIBRARY MbedTLS::mbedx509)
+    set(MBEDCRYPTO_LIBRARY MbedTLS::mbedcrypto)
+    # curl's optional DES availability check invokes a standalone try_compile
+    # project, where these in-tree Mbed TLS targets are not defined.
+    set(HAVE_MBEDTLS_DES_CRYPT_ECB 0 CACHE INTERNAL "" FORCE)
+
+    set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    set(CURL_ENABLE_SSL ON CACHE BOOL "" FORCE)
+    set(CURL_USE_MBEDTLS ON CACHE BOOL "" FORCE)
+    set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_PKGCONFIG OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_CMAKECONFIG OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBPSL OFF CACHE BOOL "" FORCE)
+    set(CURL_USE_LIBSSH2 OFF CACHE BOOL "" FORCE)
+    set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+    set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+    set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+    set(USE_LIBIDN2 OFF CACHE BOOL "" FORCE)
+    set(USE_NGHTTP2 OFF CACHE BOOL "" FORCE)
+    set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+    if(ANDROID)
+        # Android stores system root certificates in this hashed directory.
+        set(CURL_CA_PATH "/system/etc/security/cacerts" CACHE STRING "" FORCE)
+    endif()
+
+    FetchContent_Declare(
+        curl
+        GIT_REPOSITORY https://github.com/curl/curl.git
+        GIT_TAG curl-8_23_0
+        GIT_SHALLOW TRUE
+    )
+    FetchContent_MakeAvailable(curl)
+    set(CURL_FOUND TRUE)
+elseif(NOT ANDROID)
+    find_package(CURL QUIET)
+endif()
 
 # Build metadata shown for each compiled binary
 set(BUILD_PLATFORM "unknown")
@@ -86,6 +151,13 @@ if(ANDROID)
         m
         c
     )
+    if(CURL_FOUND)
+        target_link_libraries(chicken_potato_fps PRIVATE CURL::libcurl)
+        target_compile_definitions(chicken_potato_fps PRIVATE HAS_CURL)
+        message(STATUS "ChickenPotatoFPS: target libcurl found, latest-version checks enabled")
+    else()
+        message(STATUS "ChickenPotatoFPS: target libcurl unavailable, latest-version checks disabled")
+    endif()
     
     # Define PLATFORM_ANDROID for conditional compilation
     target_compile_definitions(chicken_potato_fps PRIVATE PLATFORM_ANDROID)

@@ -35,19 +35,18 @@ cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
 cmake --build build-linux --parallel "${NUM_CORES}"
 copy_if_exists "build-linux/chicken_potato_fps_linux_x86_64"
 
-# echo "Building Linux arm64 (aarch64)..."
-# if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
-#     cmake -S . -B build-linux-arm64 \
-#         -DCMAKE_BUILD_TYPE=Release \
-#         -DCMAKE_SYSTEM_NAME=Linux \
-#         -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-#         -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-#         -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
-#     cmake --build build-linux-arm64 --parallel "${NUM_CORES}"
-#     copy_if_exists "build-linux-arm64/chicken_potato_fps_linux_aarch64"
-# else
-#     echo "WARNING: aarch64-linux-gnu toolchain not found, skipping Linux arm64 build"
-# fi
+echo "Building Linux arm64 (aarch64)..."
+if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && command -v aarch64-linux-gnu-g++ >/dev/null 2>&1; then
+    ARM64_SYSROOT_PATH="${ARM64_SYSROOT:-build-linux-arm64/target-sysroot}"
+    if [[ -f "$ARM64_SYSROOT_PATH/usr/include/GL/gl.h" ]] || command -v podman >/dev/null 2>&1; then
+        ./build-linux-arm64.sh
+        copy_if_exists "build-linux-arm64/chicken_potato_fps_linux_aarch64"
+    else
+        echo "WARNING: arm64 OpenGL/X11 sysroot unavailable and Podman not found, skipping Linux arm64 build"
+    fi
+else
+    echo "WARNING: aarch64-linux-gnu toolchain not found, skipping Linux arm64 build"
+fi
 
 echo "Building Windows x86_64..."
 if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then

@@ -19,6 +19,9 @@
 // raylib's desktop GLFW backend treats any present joystick as "available";
 // query GLFW directly to distinguish a mapped gamepad from an unmapped joystick.
 #if !defined(PLATFORM_ANDROID) && !defined(PLATFORM_WEB)
+    // This code only uses GLFW's input API. Keep glfw3.h from pulling in the
+    // host OpenGL headers when compiling with a cross-toolchain.
+    #define GLFW_INCLUDE_NONE
     #include <GLFW/glfw3.h>
 #endif
 
@@ -545,7 +548,7 @@ static int CompareSemVer(const std::string& a, const std::string& b) {
     return 0;
 }
 
-#if defined(HAS_CURL) && !defined(PLATFORM_ANDROID)
+#ifdef HAS_CURL
 static size_t CurlWriteToString(char* ptr, size_t size, size_t nmemb, void* userdata) {
     if (ptr == nullptr || userdata == nullptr) return 0;
     std::string* out = static_cast<std::string*>(userdata);
@@ -921,7 +924,7 @@ int main() {
     std::string latestVersion = "";
     std::string latestVersionLine = "Latest: checking...";
     Color latestVersionColor = Fade(RAYWHITE, 0.70f);
-#if defined(HAS_CURL) && !defined(PLATFORM_ANDROID)
+#ifdef HAS_CURL
     std::future<std::string> latestVersionFuture = std::async(std::launch::async, []() {
         return FetchLatestVersionFromGitHub();
     });
@@ -2673,7 +2676,7 @@ int main() {
         SetAndroidImmersiveMode();
     #endif
 
-    #if defined(HAS_CURL) && !defined(PLATFORM_ANDROID)
+    #ifdef HAS_CURL
         if (latestVersionPending &&
             latestVersionFuture.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
             latestVersionPending = false;
@@ -5258,7 +5261,7 @@ int main() {
         }
 
         // Draw touch controls on Android
-        if (!paused && !shopOpen && !inventoryOpen && !dead) {
+        if (!controllerOwnsUi && !paused && !shopOpen && !inventoryOpen && !dead) {
             drawTouchControls();
         }
 
