@@ -49,16 +49,16 @@ copy_if_exists "build-linux/chicken_potato_fps_linux_x86_64"
 #     echo "WARNING: aarch64-linux-gnu toolchain not found, skipping Linux arm64 build"
 # fi
 
-# echo "Building Windows x86_64..."
-# if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
-#     cmake -S . -B build-windows \
-#         -DCMAKE_BUILD_TYPE=Release \
-#         -DCMAKE_TOOLCHAIN_FILE=toolchain-mingw64.cmake
-#     cmake --build build-windows --parallel "${NUM_CORES}"
-#     copy_if_exists "build-windows/chicken_potato_fps_windows_x86_64.exe"
-# else
-#     echo "WARNING: MinGW toolchain not found, skipping Windows build"
-# fi
+echo "Building Windows x86_64..."
+if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
+    cmake -S . -B build-windows \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_TOOLCHAIN_FILE=toolchain-mingw64.cmake
+    cmake --build build-windows --parallel "${NUM_CORES}"
+    copy_if_exists "build-windows/chicken_potato_fps_windows_x86_64.exe"
+else
+    echo "WARNING: MinGW toolchain not found, skipping Windows build"
+fi
 
 # echo "Building Web (Emscripten)..."
 # source  /etc/profile.d/emscripten.sh
