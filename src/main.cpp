@@ -44,7 +44,7 @@ extern "C" {
 #endif
 
 #ifndef APP_VERSION_STR
-    #define APP_VERSION_STR "1.3.0"
+    #define APP_VERSION_STR "1.3.1"
 #endif
 
 static constexpr const char* APP_VERSION = APP_VERSION_STR;
